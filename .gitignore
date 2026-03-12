@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.log
+
+# Không commit file accounts (chứa email/password)
+accounts.txt
+accounts_2.txt
+DONE|*
