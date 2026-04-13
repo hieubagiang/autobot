@@ -1,0 +1,39 @@
+{
+  "chapters": [
+    {
+      "chapter": 1,
+      "title": "Dinh nghia, cau truc tam ly cua gai",
+      "source_file": "docs/ai/chapters/chapter_01.txt"
+    },
+    {
+      "chapter": 2,
+      "title": "Nhung dieu can biet truoc khi tan gai",
+      "source_file": "docs/ai/chapters/chapter_02.txt"
+    },
+    {
+      "chapter": 3,
+      "title": "Nhung nghich ly vinh hang trong tam ly phu nu",
+      "source_file": "docs/ai/chapters/chapter_03.txt"
+    },
+    {
+      "chapter": 4,
+      "title": "Ke thien",
+      "source_file": "docs/ai/chapters/chapter_04.txt"
+    },
+    {
+      "chapter": 5,
+      "title": "Muu cong tac chien",
+      "source_file": "docs/ai/chapters/chapter_05.txt"
+    },
+    {
+      "chapter": 6,
+      "title": "Tieu nhan ke",
+      "source_file": "docs/ai/chapters/chapter_06.txt"
+    },
+    {
+      "chapter": 7,
+      "title": "Thuong dang ru tinh ke",
+      "source_file": "docs/ai/chapters/chapter_07.txt"
+    }
+  ]
+}

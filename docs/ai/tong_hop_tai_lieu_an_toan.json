@@ -1,0 +1,81 @@
+{
+  "id": "tong_hop_tai_lieu_an_toan_v1",
+  "scope": "combined_local_docs",
+  "source_files": [
+    "docs/ai/knowledge.json",
+    "docs/ai/chapters/chapter_01.txt",
+    "docs/ai/chapters/chapter_02.txt",
+    "docs/ai/chapters/chapter_03.txt",
+    "docs/ai/chapters/chapter_04.txt",
+    "docs/ai/chapters/chapter_05.txt",
+    "docs/ai/chapters/chapter_06.txt",
+    "docs/ai/chapters/chapter_07.txt",
+    "docs/ref/bikip2"
+  ],
+  "core_principles": [
+    "respect_and_boundaries",
+    "consistency_over_games",
+    "compatibility_over_pursuit",
+    "behavior_over_assumption"
+  ],
+  "stage_playbook": {
+    "intro": [
+      "clear_intent",
+      "polite_tone",
+      "neutral_open_topics"
+    ],
+    "conversation": [
+      "two_way_engagement",
+      "open_questions",
+      "avoid_spam"
+    ],
+    "date": [
+      "low_pressure_invite",
+      "safe_context",
+      "post_date_reassessment"
+    ]
+  },
+  "continue_signals": [
+    "substantive_replies",
+    "reciprocal_questions",
+    "comfortable_meeting_alignment"
+  ],
+  "stop_signals": [
+    "persistent_dry_replies",
+    "repeated_postpone_without_alternative",
+    "clear_avoidance_or_ghosting"
+  ],
+  "manipulation_section": {
+    "policy": "defensive_only",
+    "red_flags": [
+      "artificial_scarcity_or_silent_treatment",
+      "hot_cold_emotional_push_pull",
+      "conditional_affection_for_control",
+      "guilt_pressure_for_fast_decision",
+      "self_esteem_erosion"
+    ],
+    "response": [
+      "set_boundaries",
+      "verify_by_repeated_behavior",
+      "slow_down_decisions",
+      "exit_if_pattern_repeats"
+    ]
+  },
+  "ai_contract": {
+    "allow": [
+      "healthy_communication_advice",
+      "boundary_setting",
+      "risk_awareness"
+    ],
+    "deny": [
+      "coercion",
+      "deception",
+      "manipulation_how_to"
+    ],
+    "format": [
+      "short_answer",
+      "relevant_source_points",
+      "practical_takeaway"
+    ]
+  }
+}

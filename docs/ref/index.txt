@@ -1,0 +1,11 @@
+DANH SACH TAI LIEU TXT
+
+- Chương 1.txt
+- Chương 2.txt
+- Chương 3.txt
+- Chương 4 .txt
+- Chương 5.txt
+- Chương 6.txt
+- Chương 7.txt
+
+Mo file txt cung ten trong thu muc nay de doc nhanh trong VS Code.

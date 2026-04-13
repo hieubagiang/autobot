@@ -1,0 +1,37 @@
+{
+  "schema_id": "tinder_chat_log_schema_v1",
+  "required_fields": [
+    "match_id",
+    "created_at",
+    "last_updated",
+    "status",
+    "profile_snapshot",
+    "messages",
+    "metrics",
+    "evaluation"
+  ],
+  "message_item": {
+    "ts": "ISO-8601",
+    "sender": "anh|em|system",
+    "text": "string",
+    "state": "new_match|engaged|warm|invite_sent|closed",
+    "tags": [
+      "optional"
+    ]
+  },
+  "metrics": {
+    "anh_messages": 0,
+    "em_messages": 0,
+    "reciprocity_ratio": 0.0,
+    "em_question_rate": 0.0,
+    "em_dry_reply_rate": 0.0
+  },
+  "evaluation": {
+    "interest_score": 0,
+    "next_action": "continue_light|move_to_invite|single_follow_up|close_politely",
+    "next_message_suggestion": "string",
+    "notes": [
+      "string"
+    ]
+  }
+}

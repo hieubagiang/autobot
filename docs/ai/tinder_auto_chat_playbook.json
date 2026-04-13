@@ -1,0 +1,80 @@
+{
+  "id": "tinder_auto_chat_playbook_v1",
+  "language": "vi",
+  "addressing": {
+    "user": "Anh",
+    "female_counterpart": "em"
+  },
+  "policy": {
+    "safe_only": true,
+    "deny": [
+      "manipulation",
+      "coercion",
+      "spam",
+      "deception"
+    ]
+  },
+  "inputs": {
+    "user_profile": [
+      "work",
+      "interests",
+      "location",
+      "availability",
+      "constraints"
+    ],
+    "match_profile": [
+      "bio",
+      "photos",
+      "interests",
+      "location"
+    ]
+  },
+  "state_machine": [
+    "new_match",
+    "engaged",
+    "warm",
+    "invite_sent",
+    "closed"
+  ],
+  "transition_rules": {
+    "to_engaged": "match_replies_with_substance",
+    "to_warm": "match_asks_back_or_high_reciprocity",
+    "to_invite_sent": ">=3_turns_each_side_and_positive_tone",
+    "to_closed": "dry_replies_repeated_or_no_interest"
+  },
+  "timing": {
+    "follow_up_after_hours": 24,
+    "max_follow_ups_without_reply": 1
+  },
+  "templates": {
+    "opener": [
+      "Chao em, thay em co gu [X], Anh cung thich [Y]. Em thuong di cafe kieu chill hay nhon nhip?",
+      "Hello em, profile em de thuong qua. Cuoi tuan em thuong thu gian bang gi?"
+    ],
+    "engaged": [
+      "Anh de y em cung thich [chu de]. Anh hay [thoi quen ngan]. Em bat dau thich no tu luc nao?",
+      "Anh de an, tru vo hai san vi bi di ung. Em co mon ruot nao o Ha Noi khong?"
+    ],
+    "invite": [
+      "Anh thay noi chuyen hop do. Neu em ranh, minh cafe 45-60 phut cuoi tuan nay nhe, nhe nhang thoi.",
+      "Neu em thay thoai mai, Anh moi em 1 buoi cafe ngan de doi gio. Khong tien cung khong sao em nhe."
+    ],
+    "follow_up": [
+      "Anh bump nhe, neu em ban thi minh de dip khac cung duoc."
+    ],
+    "close": [
+      "Cam on em da chat, Anh chuc em mot ngay that vui nhe."
+    ]
+  },
+  "metrics": [
+    "opener_reply_rate",
+    "two_way_conversation_rate",
+    "invite_accept_rate",
+    "respectful_close_rate"
+  ],
+  "notes": [
+    "Use one idea per message.",
+    "Stop early when interest is one-sided.",
+    "Optimize for clarity and comfort, not pressure."
+  ]
+}

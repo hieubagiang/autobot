@@ -1,0 +1,66 @@
+{
+  "id": "profile_pham_doan_hieu_v1",
+  "profile_type": "personal_professional",
+  "basic_info": {
+    "full_name": "Pham Doan Hieu",
+    "display_name": "Pham Doan Hieu",
+    "nationality": "Vietnam",
+    "hometown": "Ha Tinh",
+    "current_city": "Ha Noi",
+    "current_area": "Phung Khoang, Ha Dong",
+    "height_cm": 175,
+    "weight_kg": 70
+  },
+  "education": {
+    "institution": "Hoc vien Ky thuat Mat ma",
+    "graduation_year": 2023,
+    "gpa": 3.48
+  },
+  "career": {
+    "title": "Flutter Developer",
+    "specialization": "Mobile development with Flutter",
+    "years_experience": ">5",
+    "workplace": "KiotViet (Yet Kieu, Hoan Kiem)",
+    "technical_focus": [
+      "Flutter Bloc",
+      "StoreKit v2",
+      "Gradle configuration"
+    ],
+    "working_schedule": {
+      "days": "Monday-Friday",
+      "hours_per_day": 8,
+      "estimated_hours_per_month": "168-176"
+    },
+    "salary": "2x (user-provided)"
+  },
+  "interests": {
+    "creative": [
+      "Photography"
+    ],
+    "sports": [
+      "Running"
+    ],
+    "gaming": [
+      "League of Legends"
+    ],
+    "entertainment": [
+      "Kamen Rider",
+      "The Flash",
+      "Marvel Cinematic Universe",
+      "Manhua"
+    ]
+  },
+  "keywords": [
+    "Flutter Developer",
+    "Mobile Engineer",
+    "Bloc",
+    "StoreKit v2",
+    "Gradle",
+    "Ha Noi",
+    "Ha Tinh"
+  ],
+  "notes": [
+    "Salary field is kept as provided: 2x.",
+    "Name and Vietnamese terms are stored in ASCII for compatibility."
+  ]
+}

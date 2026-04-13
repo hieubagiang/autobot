@@ -1,0 +1,144 @@
+{
+  "id": "tan_gai_knowledge_v2",
+  "title": "Ky Nang Tan Gai Cao Cap - AI Clean Knowledge Base",
+  "language": "vi",
+  "entrypoints": {
+    "primary": "docs/ai/knowledge.json",
+    "chapters_index": "docs/ai/chapters_index.json",
+    "chapters_dir": "docs/ai/chapters/"
+  },
+  "chapters": [
+    {
+      "chapter": 1,
+      "title": "Dinh nghia, cau truc tam ly cua gai",
+      "source_file": "docs/ai/chapters/chapter_01.txt"
+    },
+    {
+      "chapter": 2,
+      "title": "Nhung dieu can biet truoc khi tan gai",
+      "source_file": "docs/ai/chapters/chapter_02.txt"
+    },
+    {
+      "chapter": 3,
+      "title": "Nhung nghich ly vinh hang trong tam ly phu nu",
+      "source_file": "docs/ai/chapters/chapter_03.txt"
+    },
+    {
+      "chapter": 4,
+      "title": "Ke thien",
+      "source_file": "docs/ai/chapters/chapter_04.txt"
+    },
+    {
+      "chapter": 5,
+      "title": "Muu cong tac chien",
+      "source_file": "docs/ai/chapters/chapter_05.txt"
+    },
+    {
+      "chapter": 6,
+      "title": "Tieu nhan ke",
+      "source_file": "docs/ai/chapters/chapter_06.txt"
+    },
+    {
+      "chapter": 7,
+      "title": "Thuong dang ru tinh ke",
+      "source_file": "docs/ai/chapters/chapter_07.txt"
+    }
+  ],
+  "output_contract": {
+    "format": [
+      "short_answer",
+      "relevant_source_points",
+      "practical_takeaway"
+    ],
+    "notes": [
+      "Use only local corpus in docs/ai and docs/ref.",
+      "Separate source facts vs interpretation.",
+      "Avoid harmful coercive or manipulative guidance."
+    ],
+    "chat_addressing_preference": {
+      "language": "vi",
+      "user": "Anh",
+      "female_counterpart": "em",
+      "applies_when": "generating dating/chat message examples"
+    }
+  },
+  "supplements": [
+    {
+      "id": "bikip2_distilled_v1",
+      "source_file": "docs/ref/bikip2",
+      "purpose": "Extract practical and safe dating communication lessons for AI retrieval",
+      "keep": [
+        "Respect the other person",
+        "Confidence with accountability (apologize when wrong)",
+        "Patience and consistency",
+        "Use open-ended questions early",
+        "Avoid message spam",
+        "Prepare first date thoughtfully",
+        "Stop early when interest is clearly one-sided"
+      ],
+      "avoid": [
+        "Mind games and intentional delayed replies for control",
+        "Over-strategizing that replaces sincerity",
+        "One-size-fits-all scripts",
+        "Industrialized multi-target approach without ethics",
+        "Gender-based overgeneralizations"
+      ],
+      "workflow": [
+        "Open with clear and polite intent",
+        "Start neutral topics and discover shared interests",
+        "Evaluate two-way engagement",
+        "Suggest a low-pressure meeting with easy opt-out",
+        "Reassess compatibility after meeting"
+      ],
+      "signals": {
+        "continue": [
+          "Consistent replies with substance",
+          "Asks follow-up questions",
+          "Comfortable with meeting plan"
+        ],
+        "stop": [
+          "Repeated dry replies",
+          "Repeated postponement without alternatives",
+          "Clear avoidance or ghosting"
+        ]
+      },
+      "message_templates": {
+        "intro": "Chao ban, minh thay ban co [diem chung], neu ban ok minh muon lam quen.",
+        "open_question": "Gan day ban dang quan tam dieu gi nhat?",
+        "invite": "Neu ban ranh, cuoi tuan minh moi ban cafe 45-60p cho de noi chuyen. Khong tien cung khong sao nhe.",
+        "graceful_exit": "Cam on ban da chia se. Minh thay minh va ban chua hop nhip, nen minh xin dung o day. Chuc ban nhieu dieu tot dep."
+      },
+      "decision_rules": [
+        "Self-respect and respect first",
+        "Compatibility over persistence",
+        "Interaction quality over message volume",
+        "Observed behavior over assumptions"
+      ],
+      "ai_output_preference": [
+        "short_answer",
+        "relevant_source_points",
+        "practical_takeaway"
+      ]
+    },
+    {
+      "id": "tong_hop_tai_lieu_an_toan_v1",
+      "source_file": "docs/ai/tong_hop_tai_lieu_an_toan.json",
+      "purpose": "Single summarized safe retrieval layer with defensive manipulation-awareness"
+    },
+    {
+      "id": "profile_pham_doan_hieu_v1",
+      "source_file": "docs/ai/profile_pham_doan_hieu.json",
+      "purpose": "Personal and professional profile export for portfolio/cv/agent use"
+    },
+    {
+      "id": "tinder_auto_chat_playbook_v1",
+      "source_file": "docs/ai/tinder_auto_chat_playbook.json",
+      "purpose": "Safe auto-chat playbook for Tinder with Anh/em addressing and anti-manipulation guardrails"
+    },
+    {
+      "id": "tinder_chat_log_schema_v1",
+      "source_file": "docs/ai/tinder_chat_log_schema.json",
+      "purpose": "Per-match logging schema for context retention, evaluation, and optimization"
+    }
+  ]
+}
