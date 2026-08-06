@@ -190,28 +190,47 @@ class XecaClient:
 
 REGULAR_BUS_TYPE_NAME = "Xe giường nằm"
 
+# Time-of-day bands, most preferred first: tối (evening, >=20:00) > chiều (afternoon,
+# 12:00-20:00) > sáng (morning, <12:00 — last resort, only if nothing else is available).
+EVENING_START = "20:00"
+AFTERNOON_START = "12:00"
+
+
+def time_band_rank(start_time: str) -> int:
+    """0=tối (best), 1=chiều, 2=sáng (worst)."""
+    st = start_time or "00:00"
+    if st >= EVENING_START:
+        return 0
+    if st >= AFTERNOON_START:
+        return 1
+    return 2
+
+
+def rank_bus_times(bus_times: list[dict]) -> list[dict]:
+    """Order ALL bus_times of a day by the user's full preference, most-preferred first:
+    1. Regular bus ("Xe giường nằm") over Limousine VIP — Limousine is a last resort.
+    2. Time band: tối (evening, >=20:00) > chiều (afternoon) > sáng (morning, last resort).
+    3. Latest start_time first within the same band.
+
+    Used for "camping" a sold-out date: since we don't know in advance which specific
+    departure will free up a seat, every retry cycle should try ALL candidates in this
+    order (not just a single "best" pick) and grab the first one with a matching seat.
+    """
+    by_latest = sorted(bus_times, key=lambda b: b.get("start_time", ""), reverse=True)
+    by_band = sorted(by_latest, key=lambda b: time_band_rank(b.get("start_time")))
+    by_type = sorted(by_band, key=lambda b: 0 if b.get("bus_type_name") == REGULAR_BUS_TYPE_NAME else 1)
+    return by_type
+
 
 def select_preferred_bus_time(bus_times: list[dict]) -> dict | None:
-    """Pick the bus_time the user actually wants:
-
-    - Prefer the regular bus ("Xe giường nằm", ~340k) over Limousine VIP (~530k) —
-      Limousine is a last resort only.
-    - Within the preferred type, pick the LATEST departure of the day ("càng cuối ngày
-      càng tốt"), among times that still have seats.
-    - Falls back to Limousine (still latest-first) only if no regular bus has seats left.
-    """
+    """Single best pick for simple status reporting (Phase 1 notifications) — the top of
+    `rank_bus_times()`, preferring a candidate that still has seats. Real booking/camping
+    logic should use `rank_bus_times()` directly and try every candidate, not just this one."""
     if not bus_times:
         return None
-
-    def latest_with_seats(candidates: list[dict]) -> dict | None:
-        with_seats = [b for b in candidates if int(b.get("empty_seat", 0) or 0) > 0]
-        pool = with_seats or candidates
-        if not pool:
-            return None
-        return max(pool, key=lambda b: b.get("start_time", ""))
-
-    regular = [b for b in bus_times if b.get("bus_type_name") == REGULAR_BUS_TYPE_NAME]
-    return latest_with_seats(regular) or latest_with_seats(bus_times)
+    ranked = rank_bus_times(bus_times)
+    with_seats = [b for b in ranked if int(b.get("empty_seat", 0) or 0) > 0]
+    return (with_seats or ranked)[0]
 
 
 SEAT_FLOOR_LETTER_PRIORITY = [

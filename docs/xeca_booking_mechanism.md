@@ -19,11 +19,21 @@ Returns `data.busTimes[]`, each with `id` (bus_time_id), `bus_hop_id`, `bus_stag
 Known province ids: Hà Nội=2, Hà Tĩnh=3.
 
 `bus_type_name` distinguishes fare classes on the same route: `"Xe giường nằm"` (~340-370k,
-regular sleeper) vs `"Limousine giường VIP"` (~530k). The user's preference is regular bus
-first, Limousine only as a last resort if no regular departure has seats left — see
-`select_preferred_bus_time()` in `xeca_client.py`. On a sample day there were regular-bus
-departures as late as 23:12/23:14, so "prefer regular" and "prefer the latest time of day"
-are usually both satisfiable, not a real trade-off.
+regular sleeper) vs `"Limousine giường VIP"` (~530k). Full preference order, implemented by
+`rank_bus_times()` in `xeca_client.py`:
+1. Regular bus over Limousine (last resort only).
+2. Time-of-day band: **tối** (evening, start_time >= 20:00, most preferred) > **chiều**
+   (afternoon, 12:00–20:00) > **sáng** (morning, < 12:00, last resort).
+3. Latest start_time first within the same band.
+
+`select_preferred_bus_time()` returns just the single top pick (used for Phase 1's simple
+status reporting). Real booking/camping logic (`find_best_available_bus()` in
+`xeca_auto_book.py`) instead walks the FULL ranked list and takes the first candidate that's
+both on-sale and has enough seats matching the seat preference — necessary because on a
+sold-out-ish day the top-ranked candidate is often specifically full while a slightly
+lower-ranked one still has room (confirmed against real data: 2026-08-07 Hà Nội→Hà Tĩnh had
+12/41 departures fully sold; naively picking only "the latest regular bus" would have failed
+even though seats were available on nearby departures).
 
 Note: this endpoint does **not** reflect the "chưa mở bán" state — `online_status`/`status` stay
 `1` and `empty_seat` looks normal even for a date that isn't on sale yet. The real signal is in

@@ -106,6 +106,27 @@ Vì vậy:
 hạn giữ chỗ, link thanh toán) mỗi khi mục đó ở trạng thái `pending_payment`/`instant_holding`/
 `paid` — không chỉ 1 dòng tóm tắt.
 
+### Camp vé hết chỗ (nhiều chuyến, không chỉ 1 chuyến "tốt nhất")
+Khi 1 ngày đã mở bán nhưng **hết chỗ** (khác với "chưa mở bán"), instant-book không chỉ theo
+dõi 1 chuyến — mỗi chu kỳ thử **tất cả chuyến còn chỗ trong ngày**, theo đúng thứ tự ưu tiên:
+1. Xe giường nằm (thường) trước, Limousine chỉ là phương án cuối.
+2. Trong cùng loại xe: **tối** (≥20h, ưu tiên nhất) > **chiều** (12h-20h) > **sáng** (trước 12h,
+   bết bát lắm mới lấy).
+3. Cùng khung giờ: muộn hơn trong ngày ưu tiên hơn.
+
+→ Chuyến "tốt nhất" cụ thể có thể đang hết chỗ, nhưng chuyến kém ưu tiên hơn một chút vẫn còn
+ghế phù hợp — hệ thống tự lấy chuyến tốt nhất **trong số các chuyến đang thực sự còn chỗ**,
+không dừng lại và báo lỗi chỉ vì 1 chuyến bị full.
+
+**Tốc độ poll khi camp** (khác nhau theo tình huống, không dùng chung 1 con số):
+- **Chưa mở bán** (`SaleNotOpenError`): 60s/lần — mỗi ngày chỉ đổi trạng thái ~1 lần vào 1 mốc
+  giờ cố định, không cần gấp.
+- **Đã mở bán nhưng hết ghế phù hợp** (`NoSeatsAvailableError`, tức đang "camp"): **15s/lần** —
+  ghế trống xuất hiện khi có người khác bỏ giữ chỗ (giữ chỗ chưa thanh toán hết hạn sau ~30
+  phút) hoặc huỷ đơn, đây là cuộc đua với người/bot khác nên cần poll nhanh hơn nhiều so với
+  "chưa mở bán". 15s vẫn rất nhẹ cho server Văn Minh (mỗi lần camp chỉ ~vài request GET, không
+  phải hàng trăm/giây) nhưng đủ nhanh để không bỏ lỡ ghế vừa trống.
+
 ### Instant-book mode (`/instant <id> on`)
 Khác với `/book`+`/confirm` (đặt 1 lần, cần xác nhận thủ công), instant-book:
 1. Giữ ghế + tạo đơn (chưa thanh toán) **ngay lập tức** khi bật, không cần xác nhận lại.

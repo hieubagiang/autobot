@@ -19,7 +19,8 @@ WATCH_SERVICE = "xeca-watch.service"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 AUTO_BOOK_SCRIPT = os.path.join(SCRIPT_DIR, "xeca_auto_book.py")
 
-INSTANT_RETRY_NOT_OPEN_SECONDS = 60
+INSTANT_RETRY_NOT_OPEN_SECONDS = 60  # sale not open at all — changes ~once/day, no rush
+INSTANT_RETRY_SOLD_OUT_SECONDS = 15  # sale open but no matching seat — racing other buyers
 INSTANT_RETRY_ERROR_SECONDS = 30
 INSTANT_EXPIRY_BUFFER_SECONDS = 15
 
@@ -120,9 +121,14 @@ def instant_lock_loop(item_id: str, stop_event, notify,
     Passenger name/phone are re-read from state.json (via /passenger) each cycle rather than
     captured once at thread-start, so an edit takes effect from the next re-lock onward.
 
+    Retries fast (INSTANT_RETRY_SOLD_OUT_SECONDS) when sale is open but nothing matches the
+    seat preference yet ("camping" a sold-out date for a freed seat — a race against other
+    customers/bots, worth polling tightly) and slow (INSTANT_RETRY_NOT_OPEN_SECONDS) when
+    sale isn't open at all (changes ~once/day, no rush).
+
     Imported lazily (not at module top) to avoid a xeca_auto_book <-> xeca_control import
     cycle, since xeca_auto_book already imports xeca_state directly."""
-    from xeca_auto_book import plan_booking, execute_booking
+    from xeca_auto_book import NoSeatsAvailableError, SaleNotOpenError, execute_booking, plan_booking
     from xeca_state import get_passenger_info
 
     client = XecaClient()
@@ -142,6 +148,16 @@ def instant_lock_loop(item_id: str, stop_event, notify,
         try:
             plan = plan_booking(client, item["depart_date"], direction, item.get("quantity", 1),
                                  item.get("pickup_name"), item.get("dropoff_name"))
+        except SaleNotOpenError as e:
+            notify(f"⏳ [instant {item_id}] {e} (thử lại sau {INSTANT_RETRY_NOT_OPEN_SECONDS}s)")
+            if stop_event.wait(INSTANT_RETRY_NOT_OPEN_SECONDS):
+                return
+            continue
+        except NoSeatsAvailableError as e:
+            notify(f"🏕️ [instant {item_id}] Đang camp — {e} (thử lại sau {INSTANT_RETRY_SOLD_OUT_SECONDS}s)")
+            if stop_event.wait(INSTANT_RETRY_SOLD_OUT_SECONDS):
+                return
+            continue
         except RuntimeError as e:
             notify(f"⏳ [instant {item_id}] Chưa giữ được ghế: {e} (thử lại sau {INSTANT_RETRY_NOT_OPEN_SECONDS}s)")
             if stop_event.wait(INSTANT_RETRY_NOT_OPEN_SECONDS):

@@ -32,7 +32,7 @@ from xeca_client import (
     is_coastal_route,
     is_sale_open,
     load_env_file,
-    select_preferred_bus_time,
+    rank_bus_times,
     select_seats,
     send_telegram_message,
     send_telegram_photo,
@@ -44,6 +44,17 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8")
     except Exception:
         pass
+
+
+class SaleNotOpenError(RuntimeError):
+    """Sale hasn't opened for this date yet. Changes ~once/day — safe to retry slowly."""
+
+
+class NoSeatsAvailableError(RuntimeError):
+    """Sale is open but no seat matching the preference is free right now (sold out, or
+    only worse seats left). Seats free up when someone else's ~30 min unpaid hold lapses
+    or an order is cancelled — worth retrying much faster than SaleNotOpenError to win the
+    freed seat before someone else does."""
 
 
 def resolve_points(client: XecaClient, bus_time: dict, depart_date: int, direction: dict,
@@ -87,29 +98,59 @@ def resolve_points(client: XecaClient, bus_time: dict, depart_date: int, directi
     return pickup, dropoff, pickup_name, dropoff_name
 
 
+def find_best_available_bus(client: XecaClient, depart_date: int, direction: dict, quantity: int = 1):
+    """Tries EVERY bus_time of the day, in `rank_bus_times()` priority order (regular bus >
+    Limousine, tối > chiều > sáng, latest first within a band), and returns the first one
+    whose sale is open AND has >= quantity seats matching the seat preference. This is what
+    lets "camping" a sold-out date retry the whole day's candidates each cycle instead of
+    fixating on a single "best" pick that might specifically be full.
+
+    Raises SaleNotOpenError if no candidate's sale has opened yet, or NoSeatsAvailableError
+    if sale is open but nothing currently has enough matching seats (both retryable —
+    callers should wait and try again; NoSeatsAvailableError especially, since seats free up
+    when someone else's ~30 min unpaid hold lapses)."""
+    bus_times = client.get_bus_times(depart_date, direction["from_province_id"], direction["to_province_id"])
+    if not bus_times:
+        raise NoSeatsAvailableError("Không có chuyến nào trong ngày.")
+
+    candidates = [b for b in rank_bus_times(bus_times) if int(b.get("empty_seat", 0) or 0) > 0]
+    if not candidates:
+        raise NoSeatsAvailableError("Tất cả chuyến trong ngày đều đã hết chỗ.")
+
+    any_open = False
+    last_reason = None
+    for bus_time in candidates:
+        detail = client.get_detail_bus_time(
+            depart_date=depart_date,
+            bus_time_id=bus_time["id"],
+            bus_hop_id=bus_time["bus_hop_id"],
+            bus_stage_id=bus_time["bus_stage_id"],
+            from_province_id=direction["from_province_id"],
+            to_province_id=direction["to_province_id"],
+        )
+        open_status, reason = is_sale_open(
+            detail.get("busStageSpecialRules", []), depart_date, bus_time.get("bus_stage_id"),
+        )
+        if not open_status:
+            last_reason = reason
+            continue
+        any_open = True
+
+        seats = select_seats(detail.get("seatMap", {}), quantity)
+        if len(seats) >= quantity:
+            return bus_time, seats
+
+    if not any_open:
+        raise SaleNotOpenError(f"Chưa mở bán: {last_reason}")
+    raise NoSeatsAvailableError(
+        f"Đã mở bán nhưng không chuyến nào còn đủ {quantity} ghế phù hợp sở thích trong "
+        f"{len(candidates)} chuyến còn chỗ."
+    )
+
+
 def plan_booking(client: XecaClient, depart_date: int, direction: dict, quantity: int = 1,
                   pickup_override: str | None = None, dropoff_override: str | None = None) -> dict:
-    bus_times = client.get_bus_times(depart_date, direction["from_province_id"], direction["to_province_id"])
-    bus_time = select_preferred_bus_time(bus_times)
-    if not bus_time:
-        raise RuntimeError("Không có chuyến nào trong ngày.")
-
-    detail = client.get_detail_bus_time(
-        depart_date=depart_date,
-        bus_time_id=bus_time["id"],
-        bus_hop_id=bus_time["bus_hop_id"],
-        bus_stage_id=bus_time["bus_stage_id"],
-        from_province_id=direction["from_province_id"],
-        to_province_id=direction["to_province_id"],
-    )
-    special_rules = detail.get("busStageSpecialRules", [])
-    open_status, reason = is_sale_open(special_rules, depart_date, bus_time.get("bus_stage_id"))
-    if not open_status:
-        raise RuntimeError(f"Chưa mở bán: {reason}")
-
-    seats = select_seats(detail.get("seatMap", {}), quantity)
-    if len(seats) < quantity:
-        raise RuntimeError(f"Chỉ còn {len(seats)}/{quantity} ghế trống phù hợp sở thích.")
+    bus_time, seats = find_best_available_bus(client, depart_date, direction, quantity)
 
     pickup, dropoff, pickup_name, dropoff_name = resolve_points(
         client, bus_time, depart_date, direction, pickup_override, dropoff_override,
