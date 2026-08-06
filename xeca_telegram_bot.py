@@ -92,8 +92,8 @@ class Bot:
         self.api = f"https://api.telegram.org/bot{token}"
         self.pending_confirm = None  # {"item_id", "code", "expires_at"}
 
-    def send(self, text: str):
-        send_telegram_message(self.token, self.chat_id, text)
+    def send(self, text: str, parse_mode: str | None = None):
+        send_telegram_message(self.token, self.chat_id, text, parse_mode=parse_mode)
 
     def get_updates(self, offset: int | None):
         params = {"timeout": LONG_POLL_TIMEOUT}
@@ -133,7 +133,10 @@ class Bot:
                     traceback.print_exc()
                     reply = f"❌ Lỗi: {e}"
                 if reply:
-                    self.send(reply)
+                    try:
+                        self.send(reply)
+                    except Exception:
+                        traceback.print_exc()
 
     def dispatch(self, text: str) -> str:
         parts = text.split(maxsplit=1)
@@ -244,7 +247,10 @@ class Bot:
     def cmd_logs(self, rest: str) -> str:
         n = int(rest.strip()) if rest.strip().isdigit() else 20
         logs = get_logs(n)
-        return f"<pre>{html.escape(logs[-3500:])}</pre>" if logs else "(không có log)"
+        if not logs:
+            return "(không có log)"
+        self.send(f"<pre>{html.escape(logs[-3500:])}</pre>", parse_mode="HTML")
+        return ""
 
     def cmd_book(self, rest: str) -> str:
         item_id = rest.strip()
@@ -288,7 +294,8 @@ class Bot:
         self.send(f"⏳ Đang đặt vé thật cho {item_id} ...")
         returncode, output = run_booking(item_id, confirm=True, state_file=self.state_file, env_file=self.env_file)
         status = "✅ Xong" if returncode == 0 else "❌ Có lỗi"
-        return f"{status} (exit={returncode})\n<pre>{html.escape(output[-3500:])}</pre>"
+        self.send(f"{status} (exit={returncode})\n<pre>{html.escape(output[-3500:])}</pre>", parse_mode="HTML")
+        return ""
 
 
 def main():

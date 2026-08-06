@@ -408,10 +408,17 @@ def is_sale_open(special_rules: list[dict], depart_date: int, bus_stage_id) -> t
     return True, "Đã mở bán."
 
 
-def send_telegram_message(token: str, chat_id: str, text: str) -> dict:
+def send_telegram_message(token: str, chat_id: str, text: str, parse_mode: str | None = None) -> dict:
+    """`parse_mode` defaults to None (plain text) so literal `<`/`>`/`&` in ordinary
+    messages (e.g. "<HN-HT|HT-HN>" in help text) can't be misread as HTML and reject the
+    whole message. Only pass parse_mode="HTML" for text you've built with proper tags and
+    html.escape()'d any interpolated content."""
+    payload = {"chat_id": chat_id, "text": text}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     resp = requests.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+        json=payload,
         timeout=20,
     )
     resp.raise_for_status()
