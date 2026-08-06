@@ -113,6 +113,10 @@ dõi 1 chuyến — mỗi chu kỳ thử **tất cả chuyến còn chỗ trong 
 2. Trong cùng loại xe: **tối** (≥20h, ưu tiên nhất) > **chiều** (12h-20h) > **sáng** (trước 12h,
    bết bát lắm mới lấy).
 3. Cùng khung giờ: muộn hơn trong ngày ưu tiên hơn.
+4. Ghế: vẫn ưu tiên E/A (tầng 2) > F/B (tầng 1) như bình thường, nhưng **chỉ riêng camp mode**
+   còn chấp nhận ghế giữa C/D (tầng 2 trước) làm phương án cuối nếu không còn ghế E/A/F/B nào.
+   `/book` bình thường KHÔNG bao giờ tự chọn ghế giữa — chỉ vòng lặp instant-lock mới bật
+   `allow_middle_seats=True`.
 
 → Chuyến "tốt nhất" cụ thể có thể đang hết chỗ, nhưng chuyến kém ưu tiên hơn một chút vẫn còn
 ghế phù hợp — hệ thống tự lấy chuyến tốt nhất **trong số các chuyến đang thực sự còn chỗ**,

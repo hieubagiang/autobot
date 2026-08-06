@@ -147,7 +147,8 @@ def instant_lock_loop(item_id: str, stop_event, notify,
 
         try:
             plan = plan_booking(client, item["depart_date"], direction, item.get("quantity", 1),
-                                 item.get("pickup_name"), item.get("dropoff_name"))
+                                 item.get("pickup_name"), item.get("dropoff_name"),
+                                 allow_middle_seats=True)
         except SaleNotOpenError as e:
             notify(f"⏳ [instant {item_id}] {e} (thử lại sau {INSTANT_RETRY_NOT_OPEN_SECONDS}s)")
             if stop_event.wait(INSTANT_RETRY_NOT_OPEN_SECONDS):

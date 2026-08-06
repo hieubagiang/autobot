@@ -83,10 +83,13 @@ Returns `data.buxTimeExt` (bus/trip detail) and `data.seatMap`, plus the key fie
 - Tầng 2: `A`, `C`, `E` (+ `P-A/P-C/P-E` auxiliary seats)
 
 This matches the user's stated preference exactly: `E, A` (Tầng 2) preferred over `F, B`
-(Tầng 1), with `C`/`D` (middle lane) excluded from the preference list entirely. Since
-`select_preferred_bus_time()` already prefers "Xe giường nằm" over Limousine, this A/C/E,B/D/F
-scheme is the one Phase 2 will hit in practice — but still re-fetch the seat map per bus_time
-rather than hard-coding, in case other regular-bus categories differ.
+(Tầng 1). `C`/`D` (middle lane) are excluded by default (a regular `/book` never gets a
+middle seat) but accepted as a last resort when `select_seats(..., allow_middle=True)` —
+only ever passed by the instant-lock camping loop (`xeca_control.instant_lock_loop`), never
+by a one-shot booking. Since `select_preferred_bus_time()` already prefers "Xe giường nằm"
+over Limousine, this A/C/E,B/D/F scheme is the one Phase 2 will hit in practice — but still
+re-fetch the seat map per bus_time rather than hard-coding, in case other regular-bus
+categories differ.
 
 ## Pickup / drop-off points — `GET /boarding-points/pickup-drop-points`
 Params: `busTimeId, type (1=pickup/home zone, 2=drop-off), seats, departDate, fromWeb=true`.

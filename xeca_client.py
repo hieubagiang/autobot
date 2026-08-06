@@ -238,8 +238,12 @@ SEAT_FLOOR_LETTER_PRIORITY = [
     ("Tầng 2", "A"),
     ("Tầng 1", "F"),
     ("Tầng 1", "B"),
-    ("Tầng 2", "C"),  # middle lane — acceptable as a last resort, still floor 2 first
-    ("Tầng 1", "D"),  # middle lane — last resort
+]
+# Middle-lane seats — only acceptable when actively camping a sold-out date (instant-book
+# mode), never for a regular one-shot /book. Still floor-2-first when both are considered.
+SEAT_FLOOR_LETTER_PRIORITY_MIDDLE = [
+    ("Tầng 2", "C"),
+    ("Tầng 1", "D"),
 ]
 SEAT_NUMBER_PRIORITY = [3, 2, 4, 1, 5, 6]
 SEAT_NUMBER_RANK = {n: i for i, n in enumerate(SEAT_NUMBER_PRIORITY)}
@@ -307,16 +311,21 @@ def _iter_bookable_seats(seat_map: dict):
                 yield area_name, letter, number, seat
 
 
-def select_seats(seat_map: dict, quantity: int = 1) -> list[dict]:
+def select_seats(seat_map: dict, quantity: int = 1, allow_middle: bool = False) -> list[dict]:
     """Pick `quantity` seats per the user's stated preference:
-    floor 2 before floor 1, letter E > A (floor 2) / F > B (floor 1) — with the middle-lane
-    C (floor 2) / D (floor 1) as a last resort if no outer-lane seat is free — then seat
-    number 3 > 2 > 4 > 1 > 5 > 6. Skips auxiliary "P-" seats (type 4) and non-empty seats.
+    floor 2 before floor 1, letter E > A (floor 2) / F > B (floor 1), then seat number
+    3 > 2 > 4 > 1 > 5 > 6. Skips auxiliary "P-" seats (type 4) and non-empty seats.
+
+    `allow_middle=True` additionally accepts the middle-lane C (floor 2) / D (floor 1) as a
+    last resort if no outer-lane seat is free — only meant for camping a sold-out date
+    (instant-book mode), never for a regular one-shot booking.
 
     For quantity > 1, prefers a contiguous run of seat numbers within a single
     (floor, letter) column (adjacent seats) over independently-ranked scattered seats —
     only falls back to scattered seats if no column has enough of a contiguous block.
     """
+    floor_letter_priority = SEAT_FLOOR_LETTER_PRIORITY + (SEAT_FLOOR_LETTER_PRIORITY_MIDDLE if allow_middle else [])
+
     by_area_letter = {}
     by_key = {}
     for area_name, letter, number, seat in _iter_bookable_seats(seat_map):
@@ -324,7 +333,7 @@ def select_seats(seat_map: dict, quantity: int = 1) -> list[dict]:
         by_key[(area_name, letter, number)] = seat
 
     if quantity <= 1:
-        for area_name, letter in SEAT_FLOOR_LETTER_PRIORITY:
+        for area_name, letter in floor_letter_priority:
             for number in SEAT_NUMBER_PRIORITY:
                 seat = by_key.get((area_name, letter, number))
                 if seat:
@@ -332,7 +341,7 @@ def select_seats(seat_map: dict, quantity: int = 1) -> list[dict]:
         return []
 
     # Try each column, in floor/letter priority order, for a contiguous run of `quantity`.
-    for area_name, letter in SEAT_FLOOR_LETTER_PRIORITY:
+    for area_name, letter in floor_letter_priority:
         numbers = by_area_letter.get((area_name, letter), {})
         if len(numbers) < quantity:
             continue
@@ -353,7 +362,7 @@ def select_seats(seat_map: dict, quantity: int = 1) -> list[dict]:
     # No column has a contiguous block big enough — fall back to the best individually
     # ranked seats across all columns (still respects floor/letter/number priority).
     ranked = []
-    for area_name, letter in SEAT_FLOOR_LETTER_PRIORITY:
+    for area_name, letter in floor_letter_priority:
         for number in SEAT_NUMBER_PRIORITY:
             seat = by_key.get((area_name, letter, number))
             if seat:

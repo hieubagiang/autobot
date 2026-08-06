@@ -98,12 +98,16 @@ def resolve_points(client: XecaClient, bus_time: dict, depart_date: int, directi
     return pickup, dropoff, pickup_name, dropoff_name
 
 
-def find_best_available_bus(client: XecaClient, depart_date: int, direction: dict, quantity: int = 1):
+def find_best_available_bus(client: XecaClient, depart_date: int, direction: dict, quantity: int = 1,
+                             allow_middle_seats: bool = False):
     """Tries EVERY bus_time of the day, in `rank_bus_times()` priority order (regular bus >
     Limousine, tối > chiều > sáng, latest first within a band), and returns the first one
     whose sale is open AND has >= quantity seats matching the seat preference. This is what
     lets "camping" a sold-out date retry the whole day's candidates each cycle instead of
     fixating on a single "best" pick that might specifically be full.
+
+    `allow_middle_seats=True` (only ever passed from the instant-lock camping loop) also
+    accepts middle-lane C/D seats as a last resort — see `select_seats()`.
 
     Raises SaleNotOpenError if no candidate's sale has opened yet, or NoSeatsAvailableError
     if sale is open but nothing currently has enough matching seats (both retryable —
@@ -136,7 +140,7 @@ def find_best_available_bus(client: XecaClient, depart_date: int, direction: dic
             continue
         any_open = True
 
-        seats = select_seats(detail.get("seatMap", {}), quantity)
+        seats = select_seats(detail.get("seatMap", {}), quantity, allow_middle=allow_middle_seats)
         if len(seats) >= quantity:
             return bus_time, seats
 
@@ -149,8 +153,9 @@ def find_best_available_bus(client: XecaClient, depart_date: int, direction: dic
 
 
 def plan_booking(client: XecaClient, depart_date: int, direction: dict, quantity: int = 1,
-                  pickup_override: str | None = None, dropoff_override: str | None = None) -> dict:
-    bus_time, seats = find_best_available_bus(client, depart_date, direction, quantity)
+                  pickup_override: str | None = None, dropoff_override: str | None = None,
+                  allow_middle_seats: bool = False) -> dict:
+    bus_time, seats = find_best_available_bus(client, depart_date, direction, quantity, allow_middle_seats)
 
     pickup, dropoff, pickup_name, dropoff_name = resolve_points(
         client, bus_time, depart_date, direction, pickup_override, dropoff_override,
