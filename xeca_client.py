@@ -147,8 +147,6 @@ class XecaClient:
             "custMobileDetail": cust_mobile,
             "custNameDetail": cust_name,
             **dropoff_fields(dropoff_point),
-            "pickupType": 1,
-            "custArriveType": 3,
             "isShip": 0,
             "custEmailDetail": cust_email,
         }
@@ -355,25 +353,27 @@ def find_boarding_point(points: list[dict], name: str) -> dict | None:
 
 def pickup_fields(point: dict) -> dict:
     """A boarding point is either a home-pickup zone (door-to-door, needs
-    homePickupZoneId) or a fixed stage point (a bus office/station, needs
-    custBoardingPointId) — confirmed via a live create-order capture on the
-    Hà Nội→Hà Tĩnh direction, where the pickup was a home zone."""
+    homePickupZoneId + pickupType=1) or a fixed stage point (a bus office/station, needs
+    custBoardingPointId + pickupType=3). Confirmed via live create-order captures on both
+    directions: Hà Nội→Hà Tĩnh (pickup = home zone "493 Nguyễn Trãi") and
+    Hà Tĩnh→Hà Nội (pickup = fixed point "VP THẠCH HÀ - HT", pickupType=3).
+    `pickupType` is NOT a fixed constant — it must mirror which kind of point this is,
+    same as the `type` field already distinguishes home-zone (1) vs fixed-point (3)
+    entries in the boarding-points API response."""
     if point.get("home_pickup_zone_id") is not None:
-        return {"homePickupZoneId": point["home_pickup_zone_id"], "custBoardingPointId": None}
-    return {"homePickupZoneId": None, "custBoardingPointId": point.get("boarding_point_id")}
+        return {"homePickupZoneId": point["home_pickup_zone_id"], "custBoardingPointId": None, "pickupType": 1}
+    return {"homePickupZoneId": None, "custBoardingPointId": point.get("boarding_point_id"), "pickupType": 3}
 
 
 def dropoff_fields(point: dict) -> dict:
-    """Mirror of pickup_fields for the drop-off side. The `custArrivePointId` (fixed
-    stage point) case is confirmed via the same live capture. The home-zone case
-    (`custArriveZone`) is NOT verified against a real request — it's inferred from the
-    field being present-but-null in the captured payload — because that capture's
-    drop-off happened to be a fixed point. Double-check with --dry-run (and ideally a
-    fresh DevTools capture) before trusting a real booking whose drop-off is a home zone
-    (e.g. the Hà Tĩnh→Hà Nội direction's "Số 275 Nguyễn Trãi")."""
+    """Mirror of pickup_fields for the drop-off side (`custArriveType` follows the same
+    1=home-zone / 3=fixed-point convention). Both branches are confirmed via live capture:
+    `custArrivePointId`/`custArriveType=3` on Hà Nội→Hà Tĩnh (drop-off = fixed point
+    "VP THẠCH HÀ - HT"), `custArriveZone`/`custArriveType=1` on Hà Tĩnh→Hà Nội (drop-off =
+    home zone "Số 275 Nguyễn Trãi", custArriveZone=1110)."""
     if point.get("home_pickup_zone_id") is not None:
-        return {"custArrivePointId": None, "custArriveZone": point["home_pickup_zone_id"]}
-    return {"custArrivePointId": point.get("boarding_point_id"), "custArriveZone": None}
+        return {"custArrivePointId": None, "custArriveZone": point["home_pickup_zone_id"], "custArriveType": 1}
+    return {"custArrivePointId": point.get("boarding_point_id"), "custArriveZone": None, "custArriveType": 3}
 
 
 def is_sale_open(special_rules: list[dict], depart_date: int, bus_stage_id) -> tuple[bool, str]:

@@ -222,11 +222,13 @@ payment):
   route variant and its "XANH ĐỎ THẠCH LONG - HT" point — not yet looked up against a bus_time
   actually running that variant (e.g. the 09:00 or 12:30 departures on 08/08/2026 both showed
   "(Ven biển HT- Quốc lộ 1 NA)" in their heading). This affects both directions.
-- **`dropoff_fields()`'s home-zone branch (`custArriveZone`) is an educated guess, not
-  verified.** The one live create-order capture we have (`HN-HT`) had a home-zone *pickup*
-  and a fixed-point *drop-off*, so we've only confirmed `homePickupZoneId` /
-  `custBoardingPointId` (pickup side) and `custArrivePointId` (drop-off-as-fixed-point side).
-  The `HT-HN` direction's drop-off ("Số 275 Nguyễn Trãi") is a home zone, so a real booking
-  there will exercise the unverified `custArriveZone` field for the first time — run
-  `--dry-run` first, and ideally re-capture that direction's checkout via Chrome DevTools
-  before trusting it with real money.
+- ~~`dropoff_fields()`'s home-zone branch (`custArriveZone`) is an educated guess~~ —
+  **verified 2026-08-06** via a second live capture on `HT-HN` (pickup = fixed point
+  "VP THẠCH HÀ - HT", drop-off = home zone "Số 275 Nguyễn Trãi"). This capture also caught
+  a real bug: `pickupType`/`custArriveType` are NOT fixed constants (1/3) — they must
+  mirror whichever kind of point is resolved (1=home-zone, 3=fixed-point), same as
+  `homePickupZoneId`/`custBoardingPointId` and `custArrivePointId`/`custArriveZone`. The
+  first (`HN-HT`) capture happened to have pickupType=1/custArriveType=3, which is why the
+  original code hardcoded those values — they're now derived per-point in
+  `pickup_fields()`/`dropoff_fields()` instead. Both directions' full create-order payload
+  are now confirmed against real production requests.

@@ -94,9 +94,9 @@ thông báo nữa (status khác `pending`).
 - `HT-HN` (Hà Tĩnh → Hà Nội): đón "VP THẠCH HÀ - HT" (tuyến ven biển: đón
   "XANH ĐỎ THẠCH LONG - HT"), trả "Số 275 Nguyễn Trãi".
 
-Xem `docs/xeca_booking_mechanism.md` để biết chi tiết kỹ thuật, gồm một giả định **chưa
-verify** (field `custArriveZone` khi điểm trả là home-pickup-zone) — nên `--dry-run` trước khi
-tin tưởng đặt thật ở chiều `HT-HN`.
+Xem `docs/xeca_booking_mechanism.md` để biết chi tiết kỹ thuật. Cả 2 chiều đã được verify bằng
+capture request thật (2026-08-06), gồm cả field `custArriveZone` và `pickupType`/
+`custArriveType` (không phải hằng số cố định — tuỳ loại điểm home-zone/fixed-point).
 
 ## Định hướng tương lai (chưa làm)
 
