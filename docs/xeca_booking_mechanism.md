@@ -189,21 +189,36 @@ Key fields to fill programmatically:
 // request
 {"orderId":14013565,"provider":"vnpay","returnUrl":"https://vanminh.xeca.vn/booking/booking/complete?ticket=14013565&type=1"}
 ```
-Response not captured directly, but the browser was immediately redirected to:
+Confirmed response shape (via `xeca_auto_book.py --confirm-real-booking` run directly, not
+just browser capture):
+```json
+{
+  "redirect_url": "https://pay.vnpay.vn/vpcpay.html?vnp_Amount=35000000&vnp_Command=pay&...",
+  "success_indicator": "vnp_TransactionStatus=00",
+  "data": { "id": "14013599", "busTimeId": 17698, "custMobileNo": "0364826228",
+            "totalAmt": "350000", "paymentAmt": "350000", "paymentMethod": 3, ... }
+}
 ```
-GET https://pay.vnpay.vn/vpcpay.html?vnp_Amount=35000000&vnp_Command=pay&vnp_CreateDate=20260806165148
-  &vnp_CurrCode=VND&vnp_IpAddr=...&vnp_Locale=vn
-  &vnp_OrderInfo=Ma+ve%3A+yPIoaDVw.+SDT+Khach%3A+0364826228&vnp_OrderType=other
-  &vnp_ReturnUrl=https%3A%2F%2Fvanminh.xeca.vn%2Fbooking%2Fbooking%2Fcomplete%3Fticket%3D14013565%26type%3D1
-  &vnp_TmnCode=VANMINHW&vnp_TxnRef=yPIoaDVw_1_900&vnp_Version=2.1.0&vnp_SecureHash=...
+- `redirect_url` is the field to use (NOT `paymentUrl`/`payUrl`/`url` — an earlier guess that
+  was wrong and silently produced `None` links until caught on a real run).
+- `success_indicator` is presumably the query-string fragment the `complete` page checks for
+  after VNPay redirects back — not yet exercised end-to-end.
+- `data` echoes the full order record (see `orders/book/web` response below).
+- The `vpcpay.html` URL itself (standard VNPay `vpcpay.html` integration — `vnp_Amount` is the
+  total in VND × 100, `vnp_TxnRef` embeds the ticket code, `vnp_SecureHash` is server-signed
+  and can't be constructed client-side) redirects (302) to VNPay's own
+  `Transaction/PaymentMethod.html?token=...` page where the human picks a bank/wallet/QR method
+  — **this step cannot be automated further via API**; the script's job is to get this URL and
+  hand it to the user (e.g. via Telegram) to finish inside the countdown window.
+
+### Create-order response (confirmed)
+```json
+{"id": 14013599, "cancelTime": null, "isAutoBookToSell": false, "ticketCode": "mL7mefam",
+ "details": [{"id": 23551518}]}
 ```
-i.e. the payment-service response almost certainly returns a `paymentUrl` field containing
-this exact VNPay redirect URL (standard VNPay `vpcpay.html` integration — `vnp_Amount` is
-the total in VND × 100, `vnp_TxnRef` embeds the ticket code, `vnp_SecureHash` is server-signed
-and can't be constructed client-side). This redirects (302) to VNPay's own
-`Transaction/PaymentMethod.html?token=...` page where the human picks a bank/wallet/QR method
-— **this step cannot be automated further via API**; the script's job is to get this URL and
-hand it to the user (e.g. via Telegram) to finish inside the countdown window.
+Use `id` for the order id passed to `payment-service/v1/payment` (`xeca_client.py` originally
+guessed `orderId` first — `id` is the actual field, `orderId` doesn't exist on this response;
+fixed to check `id` first).
 
 ### Seat unlock after order creation — `POST /v1/tickets/toggleSeatLock`
 Fires automatically right after `orders/book/web` succeeds, transitioning the seat from
@@ -214,8 +229,8 @@ payment):
 ```
 
 ### Open items still not covered
-- The exact shape of the `payment-service/v1/payment` response (does it include a QR
-  image/base64 in addition to `paymentUrl`? Does a Momo/COD provider value exist?).
+- Whether `payment-service/v1/payment` ever returns a QR image/base64 alongside
+  `redirect_url`, or a Momo/COD provider value — only `provider: "vnpay"` observed so far.
 - Whether there's a webhook/poll endpoint the `complete` page uses to confirm payment status
   after VNPay redirects back with `?ticket=<id>&type=1`.
 - The real `home_pickup_zone_id` / `boarding_point_id` for the "Ven biển HT - Quốc lộ 1 NA"

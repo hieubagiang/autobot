@@ -79,9 +79,31 @@ Nhắn cho bot (chỉ chat_id đã cấu hình mới được chấp nhận):
 | `/status` | Trạng thái service + kiểm tra mở bán trực tiếp (real-time) |
 | `/book <id>` | Xem trước kế hoạch đặt (chuyến/ghế/giá), cần `/confirm` để đặt thật |
 | `/confirm <mã>` | Xác nhận đặt vé THẬT (mã có hiệu lực 2 phút) — **tốn tiền thật** |
+| `/instant <id> on\|off` | Bật/tắt tự động **giữ ghế liên tục** (xem bên dưới) |
 | `/start` `/stop` `/restart` | Điều khiển service xeca-watch |
 | `/logs [n]` | n dòng log gần nhất của xeca-watch |
 | `/help` | Danh sách lệnh |
+
+Bot cũng có **menu lệnh** (nút "/" trong Telegram, qua `setMyCommands`) và mỗi dòng trong
+`/list` có sẵn nút bấm **📖 Book / ⚡ Bật-Tắt instant / 🗑 Xoá** — bấm nút tương đương gõ lệnh,
+không cần nhớ cú pháp.
+
+### Instant-book mode (`/instant <id> on`)
+Khác với `/book`+`/confirm` (đặt 1 lần, cần xác nhận thủ công), instant-book:
+1. Giữ ghế + tạo đơn (chưa thanh toán) **ngay lập tức** khi bật, không cần xác nhận lại.
+2. Vé giữ chỗ có hạn ~30 phút (xem `orders/get-book-expired-time` trong
+   `docs/xeca_booking_mechanism.md`). Nếu bạn không thanh toán kịp, Văn Minh tự nhả ghế.
+3. Bot phát hiện hết hạn và **tự động giữ lại 1 chuyến/ghế mới** (theo đúng thứ tự ưu tiên
+   ghế đã cấu hình) ngay khi ghế trống trở lại — lặp lại vô hạn cho đến khi bạn
+   `/instant <id> off`.
+4. Mỗi lần giữ lại, bot gửi link thanh toán mới qua Telegram — bạn có thể thanh toán bất kỳ
+   lúc nào trong 1 trong các cửa sổ ~30 phút đó để chốt vé thật.
+5. Trạng thái `instant: true/false` lưu trong `state.json` — nếu `xeca-bot.service` restart,
+   bot tự resume lại các mục đang bật instant.
+
+Lưu ý: mỗi chu kỳ chỉ tạo 1 đơn chưa thanh toán (không tốn tiền cho tới khi bạn tự thanh
+toán), nhưng vẫn là hành động thật trên hệ thống Văn Minh (chiếm ghế tạm thời, tạo bản ghi
+đơn hàng) — tắt instant khi không cần nữa để tránh giữ ghế không cần thiết.
 
 `xeca-watch.service` tự động báo khi 1 mục "pending" chuyển sang mở bán, kèm gợi ý
 `/book <id>`. Sau khi `/book` xong (thành công hoặc thất bại), mục đó không tự gửi lại

@@ -10,13 +10,18 @@ rest of this deployment.
 import os
 import subprocess
 import sys
+import time
 
 from xeca_client import XecaClient, get_direction, is_sale_open, select_preferred_bus_time
-from xeca_state import DEFAULT_STATE_FILE, add_item, get_item, list_items, remove_item
+from xeca_state import DEFAULT_STATE_FILE, add_item, get_item, list_items, remove_item, update_item
 
 WATCH_SERVICE = "xeca-watch.service"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 AUTO_BOOK_SCRIPT = os.path.join(SCRIPT_DIR, "xeca_auto_book.py")
+
+INSTANT_RETRY_NOT_OPEN_SECONDS = 60
+INSTANT_RETRY_ERROR_SECONDS = 30
+INSTANT_EXPIRY_BUFFER_SECONDS = 15
 
 
 def add_ticket_request(direction: str, depart_date: int, quantity: int = 1,
@@ -99,3 +104,65 @@ def run_booking(item_id: str, confirm: bool, state_file: str = DEFAULT_STATE_FIL
 
     result = subprocess.run(args, cwd=SCRIPT_DIR, capture_output=True, text=True, timeout=timeout)
     return result.returncode, (result.stdout + result.stderr)
+
+
+def instant_lock_loop(item_id: str, stop_event, notify, cust_name: str, cust_mobile: str,
+                       state_file: str = DEFAULT_STATE_FILE, env_file: str = ".env"):
+    """Runs until `stop_event` is set (or the item is removed / instant is turned off):
+    immediately locks a seat + creates an (unpaid) order for `item_id`, then — instead of
+    stopping — waits until that hold's ~30 min deadline passes (when Văn Minh auto-releases
+    the seat back to "empty") and immediately re-locks a fresh seat, repeating forever.
+    Payment is never automated here; the user pays within whichever hold window they catch,
+    or lets it lapse and get relocked. Meant to guarantee "always holding *a* seat" on a
+    route/date rather than a specific seat number — each cycle re-runs seat selection, so a
+    different (still-preferred-order) seat may be picked if the previous one gets taken.
+
+    Imported lazily (not at module top) to avoid a xeca_auto_book <-> xeca_control import
+    cycle, since xeca_auto_book already imports xeca_state directly."""
+    from xeca_auto_book import plan_booking, execute_booking
+
+    client = XecaClient()
+    while not stop_event.is_set():
+        item = get_item(item_id, state_file)
+        if not item or not item.get("instant"):
+            return
+        direction = get_direction(item["direction"])
+
+        try:
+            plan = plan_booking(client, item["depart_date"], direction, item.get("quantity", 1),
+                                 item.get("pickup_name"), item.get("dropoff_name"))
+        except RuntimeError as e:
+            notify(f"⏳ [instant {item_id}] Chưa giữ được ghế: {e} (thử lại sau {INSTANT_RETRY_NOT_OPEN_SECONDS}s)")
+            if stop_event.wait(INSTANT_RETRY_NOT_OPEN_SECONDS):
+                return
+            continue
+
+        try:
+            result = execute_booking(
+                client, plan, direction, item["depart_date"], cust_name, cust_mobile,
+                None, None, open_browser=False,
+                message_prefix="🔒 [instant] Đã tự động giữ ghế (chưa thanh toán):",
+            )
+        except Exception as e:
+            notify(f"⚠️ [instant {item_id}] Lỗi khi giữ ghế: {e} (thử lại sau {INSTANT_RETRY_ERROR_SECONDS}s)")
+            if stop_event.wait(INSTANT_RETRY_ERROR_SECONDS):
+                return
+            continue
+
+        update_item(item_id, path=state_file, status="instant_holding", order_id=result["order_id"])
+        seat_names = ", ".join(s["seatDisplayName"] for s in plan["seats"])
+        expiry_ms = result["expiry"].get("expiredTime")
+        notify(
+            f"🔒 [instant {item_id}] Đã giữ ghế {seat_names}. Link: {result['payment_url']}\n"
+            f"Sẽ tự giữ lại khi hết hạn nếu bạn chưa thanh toán. /instant {item_id} off để dừng."
+        )
+
+        if not expiry_ms:
+            if stop_event.wait(INSTANT_RETRY_ERROR_SECONDS):
+                return
+            continue
+        wait_seconds = max(10, (expiry_ms / 1000) - time.time() + INSTANT_EXPIRY_BUFFER_SECONDS)
+        if stop_event.wait(wait_seconds):
+            return
+
+    notify(f"🛑 [instant {item_id}] Đã dừng.")

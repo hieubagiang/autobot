@@ -22,6 +22,8 @@ import os
 import random
 import sys
 import time
+import webbrowser
+from datetime import datetime, timedelta, timezone
 
 from xeca_client import (
     XecaClient,
@@ -123,6 +125,20 @@ def plan_booking(client: XecaClient, depart_date: int, direction: dict, quantity
     }
 
 
+VN_TZ = timezone(timedelta(hours=7))
+
+
+def format_expiry(expiry: dict) -> str:
+    """`expiry` is the response of GET /v1/orders/get-book-expired-time, whose
+    `expiredTime` is a Unix ms timestamp — the hard deadline to finish payment before the
+    seat lock/order is released."""
+    ms = expiry.get("expiredTime")
+    if not ms:
+        return "(không rõ hạn giữ chỗ)"
+    dt = datetime.fromtimestamp(ms / 1000, tz=VN_TZ)
+    return dt.strftime("%H:%M:%S %d/%m/%Y")
+
+
 def _point_id(point: dict) -> str:
     zone_id = point.get("home_pickup_zone_id")
     point_id = point.get("boarding_point_id")
@@ -144,7 +160,12 @@ def describe_plan(plan: dict, direction: dict) -> str:
 
 
 def execute_booking(client: XecaClient, plan: dict, direction: dict, depart_date: int,
-                     cust_name: str, cust_mobile: str, token: str | None, chat_id: str | None):
+                     cust_name: str, cust_mobile: str, token: str | None, chat_id: str | None,
+                     open_browser: bool = False, message_prefix: str = "🎟️ Đã đặt vé, cần thanh toán ngay!") -> dict:
+    """Locks seat(s), creates the order, and initiates VNPay payment. Returns
+    {"order_id", "expiry": <get-book-expired-time response>, "payment_url"} so callers
+    (one-shot CLI, or the instant-lock loop) can act on the hold deadline without
+    re-fetching it."""
     bt = plan["bus_time"]
     seat_ids = [s["seatId"] for s in plan["seats"]]
 
@@ -155,7 +176,8 @@ def execute_booking(client: XecaClient, plan: dict, direction: dict, depart_date
     print("[LOCK] Đã giữ ghế:", [s.get("seatDisplayName") for s in plan["seats"]])
 
     expiry = client.get_book_expired_time(bt["id"], depart_date, bt["start_time"], len(seat_ids))
-    print("[EXPIRE] ", expiry)
+    expiry_text = format_expiry(expiry)
+    print("[EXPIRE] ", expiry, "->", expiry_text)
 
     order = client.create_order(
         depart_date=depart_date, bus_time_id=bt["id"], bus_hop_id=bt["bus_hop_id"],
@@ -164,17 +186,20 @@ def execute_booking(client: XecaClient, plan: dict, direction: dict, depart_date
         dropoff_name=plan["dropoff_name"], dropoff_point=plan["dropoff"],
     )
     print("[ORDER] ", order)
-    order_id = order.get("orderId") or order.get("id")
+    order_id = order.get("id") or order.get("orderId")
 
     payment = client.initiate_payment(order_id)
     print("[PAYMENT] ", payment)
-    payment_url = payment.get("paymentUrl") or payment.get("payUrl") or payment.get("url")
+    payment_url = (
+        payment.get("redirect_url") or payment.get("paymentUrl")
+        or payment.get("payUrl") or payment.get("url")
+    )
 
     text = (
-        f"🎟️ Đã đặt vé, cần thanh toán ngay!\n\n{describe_plan(plan, direction)}\n\n"
+        f"{message_prefix}\n\n{describe_plan(plan, direction)}\n\n"
         f"Order ID: {order_id}\n"
         f"Link thanh toán: {payment_url}\n"
-        f"⏰ Vui lòng thanh toán trong thời gian giữ chỗ (~20 phút)."
+        f"⏰ Hạn giữ chỗ: {expiry_text} (giờ VN) — thanh toán trước giờ này."
     )
     if token and chat_id:
         send_telegram_message(token, chat_id, text)
@@ -184,7 +209,13 @@ def execute_booking(client: XecaClient, plan: dict, direction: dict, depart_date
     else:
         print(text)
 
-    return order_id
+    if open_browser and payment_url:
+        try:
+            webbrowser.open(payment_url)
+        except Exception as e:
+            print(f"[WARN] Không mở được trình duyệt tự động: {e}")
+
+    return {"order_id": order_id, "expiry": expiry, "payment_url": payment_url}
 
 
 def main():
@@ -201,6 +232,8 @@ def main():
     parser.add_argument("--confirm-real-booking", action="store_true",
                          help="Bắt buộc phải có flag này để thực sự giữ ghế + tạo đơn thật")
     parser.add_argument("--once", action="store_true", help="Chỉ thử 1 lần rồi thoát (kể cả khi chưa mở bán)")
+    parser.add_argument("--open-browser", action="store_true",
+                         help="Tự mở trình duyệt tới link thanh toán sau khi đặt thành công (chỉ dùng khi chạy local có GUI)")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--state-file", default=DEFAULT_STATE_FILE)
     args = parser.parse_args()
@@ -252,9 +285,10 @@ def main():
                                            describe_plan(plan, direction) +
                                            "\n\nChạy lại với --confirm-real-booking để đặt thật.")
             else:
-                order_id = execute_booking(client, plan, direction, depart_date, cust_name, cust_mobile, token, chat_id)
+                result = execute_booking(client, plan, direction, depart_date, cust_name, cust_mobile,
+                                          token, chat_id, open_browser=args.open_browser)
                 if item:
-                    update_item(item["id"], path=args.state_file, status="booked", order_id=order_id)
+                    update_item(item["id"], path=args.state_file, status="booked", order_id=result["order_id"])
             break
         except RuntimeError as e:
             print(f"[WAIT] {e}")
