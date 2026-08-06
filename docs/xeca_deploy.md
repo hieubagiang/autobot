@@ -80,6 +80,8 @@ Nhắn cho bot (chỉ chat_id đã cấu hình mới được chấp nhận):
 | `/book <id>` | Xem trước kế hoạch đặt (chuyến/ghế/giá), cần `/confirm` để đặt thật |
 | `/confirm <mã>` | Xác nhận đặt vé THẬT (mã có hiệu lực 2 phút) — **tốn tiền thật** |
 | `/instant <id> on\|off` | Bật/tắt tự động **giữ ghế liên tục** (xem bên dưới) |
+| `/passenger` | Xem tên/SĐT hành khách đang dùng để đặt vé thật |
+| `/setpassenger <sđt> <tên>` | Đổi tên/SĐT hành khách — lưu vào `state.json`, không cần sửa `.env`/SSH vào server |
 | `/start` `/stop` `/restart` | Điều khiển service xeca-watch |
 | `/logs [n]` | n dòng log gần nhất của xeca-watch |
 | `/help` | Danh sách lệnh |

@@ -16,6 +16,8 @@ under each /list item — buttons call the same handlers as the text commands):
   /book <id>                                               - preview plan, ask to /confirm
   /confirm <code>                                          - confirm the pending /book (real money!)
   /instant <id> on|off                                     - keep re-locking a seat until stopped
+  /passenger                                               - show the passenger name/phone used for real bookings
+  /setpassenger <phone> <tên...>                            - change passenger name/phone
   /start /stop /restart                                    - control xeca-watch.service
   /logs [n]                                                - last n lines of xeca-watch logs
   /help                                                     - this list
@@ -48,7 +50,7 @@ from xeca_control import (
     service_control,
 )
 from xeca_auto_book import describe_plan, plan_booking
-from xeca_state import DEFAULT_STATE_FILE, get_item, update_item
+from xeca_state import DEFAULT_STATE_FILE, get_item, get_passenger_info, set_passenger, update_item
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -68,6 +70,8 @@ BOT_COMMANDS = [
     {"command": "remove", "description": "Xoá 1 vé khỏi watchlist"},
     {"command": "setpickup", "description": "Ghi đè điểm đón"},
     {"command": "setdropoff", "description": "Ghi đè điểm trả"},
+    {"command": "passenger", "description": "Xem thông tin hành khách hiện tại"},
+    {"command": "setpassenger", "description": "Đổi tên/SĐT hành khách: <sđt> <tên>"},
     {"command": "logs", "description": "Xem log gần nhất"},
     {"command": "restart", "description": "Khởi động lại service theo dõi"},
     {"command": "help", "description": "Danh sách lệnh"},
@@ -118,14 +122,11 @@ def item_keyboard(item: dict) -> dict:
 
 
 class Bot:
-    def __init__(self, token: str, chat_id: str, state_file: str, env_file: str,
-                 cust_name: str | None, cust_mobile: str | None):
+    def __init__(self, token: str, chat_id: str, state_file: str, env_file: str):
         self.token = token
         self.chat_id = str(chat_id)
         self.state_file = state_file
         self.env_file = env_file
-        self.cust_name = cust_name
-        self.cust_mobile = cust_mobile
         self.api = f"https://api.telegram.org/bot{token}"
         self.pending_confirm = None  # {"item_id", "code", "expires_at"}
         self.instant_threads = {}  # item_id -> {"stop_event": Event, "thread": Thread}
@@ -246,6 +247,8 @@ class Bot:
             "/book": self.cmd_book,
             "/confirm": self.cmd_confirm,
             "/instant": self.cmd_instant,
+            "/passenger": lambda r: self.cmd_passenger(),
+            "/setpassenger": self.cmd_setpassenger,
             "/stop": lambda r: service_control("stop"),
             "/restart": lambda r: service_control("restart"),
             "/logs": self.cmd_logs,
@@ -270,9 +273,25 @@ class Bot:
             "/book <id> — xem trước kế hoạch, cần /confirm để đặt thật\n"
             "/confirm <mã> — xác nhận đặt vé thật (có hiệu lực 2 phút)\n"
             "/instant <id> on|off — tự động giữ ghế liên tục (chưa thanh toán, tự giữ lại khi hết hạn)\n"
+            "/passenger — xem tên/SĐT hành khách hiện tại\n"
+            "/setpassenger <sđt> <tên> — đổi tên/SĐT hành khách dùng khi đặt vé thật\n"
             "/start /stop /restart — điều khiển service theo dõi\n"
             "/logs [n]"
         )
+
+    def cmd_passenger(self) -> str:
+        name, phone = get_passenger_info(self.state_file)
+        if not name or not phone:
+            return "Chưa có thông tin hành khách. Dùng /setpassenger <sđt> <tên> để thiết lập."
+        return f"Hành khách hiện tại:\nSĐT: {phone}\nTên: {name}"
+
+    def cmd_setpassenger(self, rest: str) -> str:
+        parts = rest.split(maxsplit=1)
+        if len(parts) < 2:
+            return "Cú pháp: /setpassenger <số điện thoại> <tên>"
+        phone, name = parts
+        set_passenger(name.strip(), phone.strip(), self.state_file)
+        return f"✅ Đã cập nhật hành khách:\nSĐT: {phone.strip()}\nTên: {name.strip()}"
 
     def cmd_add(self, rest: str) -> str:
         parts = rest.split()
@@ -410,8 +429,9 @@ class Bot:
         if enable:
             if item_id in self.instant_threads:
                 return f"[instant {item_id}] đã đang bật rồi."
-            if not self.cust_name or not self.cust_mobile:
-                return "Thiếu XECA_PASSENGER_NAME/XECA_PASSENGER_PHONE trong .env, không thể bật instant."
+            cust_name, cust_mobile = get_passenger_info(self.state_file)
+            if not cust_name or not cust_mobile:
+                return "Chưa có thông tin hành khách — dùng /setpassenger <sđt> <tên> trước khi bật instant."
             update_item(item_id, path=self.state_file, instant=True)
             return self.start_instant(item_id)
         else:
@@ -425,8 +445,7 @@ class Bot:
         stop_event = threading.Event()
         thread = threading.Thread(
             target=instant_lock_loop,
-            args=(item_id, stop_event, self.send, self.cust_name, self.cust_mobile,
-                  self.state_file, self.env_file),
+            args=(item_id, stop_event, self.send, self.state_file, self.env_file),
             daemon=True,
         )
         self.instant_threads[item_id] = {"stop_event": stop_event, "thread": thread}
@@ -444,10 +463,8 @@ def main():
     if not token or not chat_id:
         print("[ERROR] Thiếu TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID trong .env")
         return
-    cust_name = os.environ.get("XECA_PASSENGER_NAME")
-    cust_mobile = os.environ.get("XECA_PASSENGER_PHONE")
 
-    bot = Bot(token, chat_id, DEFAULT_STATE_FILE, ".env", cust_name, cust_mobile)
+    bot = Bot(token, chat_id, DEFAULT_STATE_FILE, ".env")
     bot.run()
 
 

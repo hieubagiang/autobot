@@ -106,7 +106,7 @@ def run_booking(item_id: str, confirm: bool, state_file: str = DEFAULT_STATE_FIL
     return result.returncode, (result.stdout + result.stderr)
 
 
-def instant_lock_loop(item_id: str, stop_event, notify, cust_name: str, cust_mobile: str,
+def instant_lock_loop(item_id: str, stop_event, notify,
                        state_file: str = DEFAULT_STATE_FILE, env_file: str = ".env"):
     """Runs until `stop_event` is set (or the item is removed / instant is turned off):
     immediately locks a seat + creates an (unpaid) order for `item_id`, then — instead of
@@ -117,9 +117,13 @@ def instant_lock_loop(item_id: str, stop_event, notify, cust_name: str, cust_mob
     route/date rather than a specific seat number — each cycle re-runs seat selection, so a
     different (still-preferred-order) seat may be picked if the previous one gets taken.
 
+    Passenger name/phone are re-read from state.json (via /passenger) each cycle rather than
+    captured once at thread-start, so an edit takes effect from the next re-lock onward.
+
     Imported lazily (not at module top) to avoid a xeca_auto_book <-> xeca_control import
     cycle, since xeca_auto_book already imports xeca_state directly."""
     from xeca_auto_book import plan_booking, execute_booking
+    from xeca_state import get_passenger_info
 
     client = XecaClient()
     while not stop_event.is_set():
@@ -127,6 +131,13 @@ def instant_lock_loop(item_id: str, stop_event, notify, cust_name: str, cust_mob
         if not item or not item.get("instant"):
             return
         direction = get_direction(item["direction"])
+
+        cust_name, cust_mobile = get_passenger_info(state_file)
+        if not cust_name or not cust_mobile:
+            notify(f"⚠️ [instant {item_id}] Thiếu thông tin hành khách (/passenger) — tạm dừng, thử lại sau {INSTANT_RETRY_ERROR_SECONDS}s.")
+            if stop_event.wait(INSTANT_RETRY_ERROR_SECONDS):
+                return
+            continue
 
         try:
             plan = plan_booking(client, item["depart_date"], direction, item.get("quantity", 1),

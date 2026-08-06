@@ -37,7 +37,7 @@ from xeca_client import (
     send_telegram_message,
     send_telegram_photo,
 )
-from xeca_state import DEFAULT_STATE_FILE, get_item, update_item
+from xeca_state import DEFAULT_STATE_FILE, get_item, get_passenger_info, update_item
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -241,11 +241,10 @@ def main():
     load_env_file(args.env_file)
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    cust_name = os.environ.get("XECA_PASSENGER_NAME")
-    cust_mobile = os.environ.get("XECA_PASSENGER_PHONE")
+    cust_name, cust_mobile = get_passenger_info(args.state_file)
 
     if not args.dry_run and not cust_name:
-        print("[ERROR] Thiếu XECA_PASSENGER_NAME/XECA_PASSENGER_PHONE trong .env")
+        print("[ERROR] Thiếu thông tin hành khách — set qua /passenger trên Telegram hoặc XECA_PASSENGER_NAME/XECA_PASSENGER_PHONE trong .env")
         return
 
     item = None
