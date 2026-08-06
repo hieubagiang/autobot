@@ -238,6 +238,8 @@ SEAT_FLOOR_LETTER_PRIORITY = [
     ("Tầng 2", "A"),
     ("Tầng 1", "F"),
     ("Tầng 1", "B"),
+    ("Tầng 2", "C"),  # middle lane — acceptable as a last resort, still floor 2 first
+    ("Tầng 1", "D"),  # middle lane — last resort
 ]
 SEAT_NUMBER_PRIORITY = [3, 2, 4, 1, 5, 6]
 SEAT_NUMBER_RANK = {n: i for i, n in enumerate(SEAT_NUMBER_PRIORITY)}
@@ -307,8 +309,9 @@ def _iter_bookable_seats(seat_map: dict):
 
 def select_seats(seat_map: dict, quantity: int = 1) -> list[dict]:
     """Pick `quantity` seats per the user's stated preference:
-    floor 2 before floor 1, letter E > A (floor 2) / F > B (floor 1), then seat number
-    3 > 2 > 4 > 1 > 5 > 6. Skips auxiliary "P-" seats (type 4) and non-empty seats.
+    floor 2 before floor 1, letter E > A (floor 2) / F > B (floor 1) — with the middle-lane
+    C (floor 2) / D (floor 1) as a last resort if no outer-lane seat is free — then seat
+    number 3 > 2 > 4 > 1 > 5 > 6. Skips auxiliary "P-" seats (type 4) and non-empty seats.
 
     For quantity > 1, prefers a contiguous run of seat numbers within a single
     (floor, letter) column (adjacent seats) over independently-ranked scattered seats —
