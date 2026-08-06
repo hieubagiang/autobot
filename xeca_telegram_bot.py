@@ -67,6 +67,7 @@ BOT_COMMANDS = [
     {"command": "status", "description": "Trạng thái service + kiểm tra mở bán"},
     {"command": "book", "description": "Xem trước kế hoạch đặt vé (cần /confirm)"},
     {"command": "instant", "description": "Bật/tắt tự động giữ ghế liên tục: <id> on|off"},
+    {"command": "paid", "description": "Đánh dấu 1 vé đã thanh toán xong: <id>"},
     {"command": "remove", "description": "Xoá 1 vé khỏi watchlist"},
     {"command": "setpickup", "description": "Ghi đè điểm đón"},
     {"command": "setdropoff", "description": "Ghi đè điểm trả"},
@@ -89,11 +90,42 @@ def parse_date(text: str) -> int | None:
     return None
 
 
+STATUS_LABELS = {
+    "pending": "⏳ Đang chờ mở bán",
+    "notified": "🎉 Đã mở bán, sẵn sàng /book",
+    "pending_payment": "⏳ Đã giữ chỗ — CHỜ THANH TOÁN",
+    "instant_holding": "🔒 Đang tự động giữ chỗ (instant)",
+    "paid": "✅ ĐÃ THANH TOÁN",
+    "cancelled": "🚫 Đã huỷ",
+}
+
+
 def format_item(item: dict, live: dict | None = None) -> str:
     direction = DIRECTIONS.get(item["direction"], {}).get("label", item["direction"])
-    line = f"[{item['id']}] {direction} - {item['depart_date']} - x{item.get('quantity', 1)} - {item['status']}"
+    status_label = STATUS_LABELS.get(item["status"], item["status"])
+    header = f"[{item['id']}] {direction} - {item['depart_date']} - x{item.get('quantity', 1)} - {status_label}"
     if item.get("instant"):
-        line += " ⚡instant"
+        header += " ⚡"
+
+    booking = item.get("booking")
+    if booking:
+        seat_names = ", ".join(booking.get("seat_names") or [])
+        lines = [
+            header,
+            f"Người đặt: {booking.get('cust_name')} ({booking.get('cust_mobile')})",
+            f"Giờ đi - đến: {booking.get('start_time')} - {booking.get('end_time')}",
+            f"Ghế: {seat_names}",
+            f"Giá: {booking.get('price_per_seat'):,}đ/vé x{len(booking.get('seat_names') or [])} = {booking.get('total_price'):,}đ",
+            f"Điểm đón: {booking.get('pickup_name')}",
+            f"Điểm trả: {booking.get('dropoff_name')}",
+        ]
+        if item["status"] != "paid":
+            lines.append(f"Hạn giữ chỗ: {booking.get('hold_expiry')}")
+            if booking.get("payment_url"):
+                lines.append(f"Link thanh toán: {booking['payment_url']}")
+        return "\n".join(lines)
+
+    line = header
     if item.get("pickup_name"):
         line += f"\n  Đón: {item['pickup_name']}"
     if item.get("dropoff_name"):
@@ -114,11 +146,14 @@ def item_keyboard(item: dict) -> dict:
         if item.get("instant")
         else {"text": "⚡ Bật instant", "callback_data": f"inston:{item_id}"}
     )
-    return {"inline_keyboard": [[
+    rows = [[
         {"text": "📖 Book", "callback_data": f"book:{item_id}"},
         instant_btn,
         {"text": "🗑 Xoá", "callback_data": f"remove:{item_id}"},
-    ]]}
+    ]]
+    if item.get("status") in ("pending_payment", "instant_holding"):
+        rows.append([{"text": "✅ Đã thanh toán", "callback_data": f"paid:{item_id}"}])
+    return {"inline_keyboard": rows}
 
 
 class Bot:
@@ -224,6 +259,8 @@ class Bot:
                 reply = self.set_instant(item_id, True)
             elif action == "instoff":
                 reply = self.set_instant(item_id, False)
+            elif action == "paid":
+                reply = self.cmd_paid(item_id)
             else:
                 reply = f"Không hiểu hành động: {data}"
         except Exception as e:
@@ -247,6 +284,7 @@ class Bot:
             "/book": self.cmd_book,
             "/confirm": self.cmd_confirm,
             "/instant": self.cmd_instant,
+            "/paid": lambda r: self.cmd_paid(r.strip()),
             "/passenger": lambda r: self.cmd_passenger(),
             "/setpassenger": self.cmd_setpassenger,
             "/stop": lambda r: service_control("stop"),
@@ -273,6 +311,7 @@ class Bot:
             "/book <id> — xem trước kế hoạch, cần /confirm để đặt thật\n"
             "/confirm <mã> — xác nhận đặt vé thật (có hiệu lực 2 phút)\n"
             "/instant <id> on|off — tự động giữ ghế liên tục (chưa thanh toán, tự giữ lại khi hết hạn)\n"
+            "/paid <id> — đánh dấu đã thanh toán xong (dừng auto-relock nếu đang instant)\n"
             "/passenger — xem tên/SĐT hành khách hiện tại\n"
             "/setpassenger <sđt> <tên> — đổi tên/SĐT hành khách dùng khi đặt vé thật\n"
             "/start /stop /restart — điều khiển service theo dõi\n"
@@ -341,6 +380,21 @@ class Bot:
         for item in items:
             self.send(format_item(item), reply_markup=item_keyboard(item))
         return ""
+
+    def cmd_paid(self, item_id: str) -> str:
+        if not item_id:
+            return "Cú pháp: /paid <id>"
+        item = get_item(item_id, self.state_file)
+        if not item:
+            return f"Không tìm thấy id={item_id}"
+        if item["status"] not in ("pending_payment", "instant_holding"):
+            return f"[{item_id}] không có giao dịch nào đang chờ thanh toán (status={item['status']})."
+
+        update_item(item_id, path=self.state_file, status="paid", instant=False)
+        entry = self.instant_threads.pop(item_id, None)
+        if entry:
+            entry["stop_event"].set()
+        return f"✅ Đã đánh dấu [{item_id}] là đã thanh toán. Chúc bạn thượng lộ bình an!"
 
     def cmd_remove(self, rest: str) -> str:
         item_id = rest.strip()

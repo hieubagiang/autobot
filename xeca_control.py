@@ -160,12 +160,14 @@ def instant_lock_loop(item_id: str, stop_event, notify,
                 return
             continue
 
-        update_item(item_id, path=state_file, status="instant_holding", order_id=result["order_id"])
+        update_item(item_id, path=state_file, status="instant_holding", order_id=result["order_id"],
+                    booking=result["booking"])
         seat_names = ", ".join(s["seatDisplayName"] for s in plan["seats"])
         expiry_ms = result["expiry"].get("expiredTime")
         notify(
             f"🔒 [instant {item_id}] Đã giữ ghế {seat_names}. Link: {result['payment_url']}\n"
-            f"Sẽ tự giữ lại khi hết hạn nếu bạn chưa thanh toán. /instant {item_id} off để dừng."
+            f"Thanh toán xong thì /paid {item_id} (sẽ dừng tự relock). "
+            f"Chưa thanh toán thì cứ để đó, hết hạn tôi tự giữ lại. /instant {item_id} off để dừng hẳn."
         )
 
         if not expiry_ms:

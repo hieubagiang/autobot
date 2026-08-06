@@ -80,6 +80,7 @@ Nhắn cho bot (chỉ chat_id đã cấu hình mới được chấp nhận):
 | `/book <id>` | Xem trước kế hoạch đặt (chuyến/ghế/giá), cần `/confirm` để đặt thật |
 | `/confirm <mã>` | Xác nhận đặt vé THẬT (mã có hiệu lực 2 phút) — **tốn tiền thật** |
 | `/instant <id> on\|off` | Bật/tắt tự động **giữ ghế liên tục** (xem bên dưới) |
+| `/paid <id>` | Đánh dấu 1 vé đã thanh toán xong (dừng auto-relock nếu đang instant) |
 | `/passenger` | Xem tên/SĐT hành khách đang dùng để đặt vé thật |
 | `/setpassenger <sđt> <tên>` | Đổi tên/SĐT hành khách — lưu vào `state.json`, không cần sửa `.env`/SSH vào server |
 | `/start` `/stop` `/restart` | Điều khiển service xeca-watch |
@@ -90,6 +91,21 @@ Bot cũng có **menu lệnh** (nút "/" trong Telegram, qua `setMyCommands`) và
 `/list` có sẵn nút bấm **📖 Book / ⚡ Bật-Tắt instant / 🗑 Xoá** — bấm nút tương đương gõ lệnh,
 không cần nhớ cú pháp.
 
+### Trạng thái vé (`status` trong `state.json`)
+Gọi `payment-service/v1/payment` thành công (có `redirect_url`) chỉ nghĩa là **đơn đã tạo +
+ghế đã giữ** — KHÔNG có nghĩa là đã thanh toán (chưa xác nhận được qua webhook/poll nào).
+Vì vậy:
+- `pending` — đang chờ mở bán.
+- `notified` — đã mở bán, sẵn sàng `/book`.
+- `pending_payment` — đã tạo đơn + giữ ghế (`/book`+`/confirm`), **chưa xác nhận thanh toán**.
+- `instant_holding` — đang trong chế độ instant-book, tự relock liên tục, **chưa xác nhận
+  thanh toán**.
+- `paid` — bạn đã tự bấm nút "✅ Đã thanh toán" hoặc gõ `/paid <id>` sau khi thanh toán xong.
+
+`/list`/`/status` hiển thị đầy đủ thông tin vé (người đặt, giờ đi/đến, giá, ghế, điểm đón/trả,
+hạn giữ chỗ, link thanh toán) mỗi khi mục đó ở trạng thái `pending_payment`/`instant_holding`/
+`paid` — không chỉ 1 dòng tóm tắt.
+
 ### Instant-book mode (`/instant <id> on`)
 Khác với `/book`+`/confirm` (đặt 1 lần, cần xác nhận thủ công), instant-book:
 1. Giữ ghế + tạo đơn (chưa thanh toán) **ngay lập tức** khi bật, không cần xác nhận lại.
@@ -99,9 +115,10 @@ Khác với `/book`+`/confirm` (đặt 1 lần, cần xác nhận thủ công), 
    ghế đã cấu hình) ngay khi ghế trống trở lại — lặp lại vô hạn cho đến khi bạn
    `/instant <id> off`.
 4. Mỗi lần giữ lại, bot gửi link thanh toán mới qua Telegram — bạn có thể thanh toán bất kỳ
-   lúc nào trong 1 trong các cửa sổ ~30 phút đó để chốt vé thật.
+   lúc nào trong 1 trong các cửa sổ ~30 phút đó để chốt vé thật. Thanh toán xong thì
+   `/paid <id>` (hoặc bấm nút "✅ Đã thanh toán") — bot dừng auto-relock ngay lập tức.
 5. Trạng thái `instant: true/false` lưu trong `state.json` — nếu `xeca-bot.service` restart,
-   bot tự resume lại các mục đang bật instant.
+   bot tự resume lại các mục đang bật instant (trừ khi đã `/paid`).
 
 Lưu ý: mỗi chu kỳ chỉ tạo 1 đơn chưa thanh toán (không tốn tiền cho tới khi bạn tự thanh
 toán), nhưng vẫn là hành động thật trên hệ thống Văn Minh (chiếm ghế tạm thời, tạo bản ghi

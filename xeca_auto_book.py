@@ -159,13 +159,36 @@ def describe_plan(plan: dict, direction: dict) -> str:
     )
 
 
+def booking_snapshot(plan: dict, direction: dict, order_id, cust_name: str, cust_mobile: str,
+                      expiry_text: str, payment_url: str | None) -> dict:
+    """Full ticket details worth persisting onto the watchlist item once a booking
+    succeeds, so /list and /status can show everything (passenger, times, price, seat,
+    pickup/drop-off) without the user having to dig up the original Telegram message."""
+    bt = plan["bus_time"]
+    return {
+        "order_id": order_id,
+        "cust_name": cust_name,
+        "cust_mobile": cust_mobile,
+        "direction_label": direction["label"],
+        "start_time": bt.get("start_time"),
+        "end_time": bt.get("end_time"),
+        "seat_names": [s.get("seatDisplayName") for s in plan["seats"]],
+        "price_per_seat": bt.get("price"),
+        "total_price": (bt.get("price") or 0) * len(plan["seats"]),
+        "pickup_name": plan["pickup_name"],
+        "dropoff_name": plan["dropoff_name"],
+        "hold_expiry": expiry_text,
+        "payment_url": payment_url,
+    }
+
+
 def execute_booking(client: XecaClient, plan: dict, direction: dict, depart_date: int,
                      cust_name: str, cust_mobile: str, token: str | None, chat_id: str | None,
                      open_browser: bool = False, message_prefix: str = "🎟️ Đã đặt vé, cần thanh toán ngay!") -> dict:
     """Locks seat(s), creates the order, and initiates VNPay payment. Returns
-    {"order_id", "expiry": <get-book-expired-time response>, "payment_url"} so callers
-    (one-shot CLI, or the instant-lock loop) can act on the hold deadline without
-    re-fetching it."""
+    {"order_id", "expiry", "payment_url", "booking"} so callers (one-shot CLI, or the
+    instant-lock loop) can act on the hold deadline and persist full ticket details
+    without re-fetching them."""
     bt = plan["bus_time"]
     seat_ids = [s["seatId"] for s in plan["seats"]]
 
@@ -215,7 +238,8 @@ def execute_booking(client: XecaClient, plan: dict, direction: dict, depart_date
         except Exception as e:
             print(f"[WARN] Không mở được trình duyệt tự động: {e}")
 
-    return {"order_id": order_id, "expiry": expiry, "payment_url": payment_url}
+    booking = booking_snapshot(plan, direction, order_id, cust_name, cust_mobile, expiry_text, payment_url)
+    return {"order_id": order_id, "expiry": expiry, "payment_url": payment_url, "booking": booking}
 
 
 def main():
@@ -287,7 +311,12 @@ def main():
                 result = execute_booking(client, plan, direction, depart_date, cust_name, cust_mobile,
                                           token, chat_id, open_browser=args.open_browser)
                 if item:
-                    update_item(item["id"], path=args.state_file, status="booked", order_id=result["order_id"])
+                    # "pending_payment": order created + seat held, but NOT yet confirmed paid —
+                    # getting a redirect_url only means the order/hold succeeded, not that money
+                    # actually changed hands. The user marks it "paid" themselves (button/command)
+                    # once they've completed payment, since there's no confirmed webhook/poll for it.
+                    update_item(item["id"], path=args.state_file, status="pending_payment",
+                                order_id=result["order_id"], booking=result["booking"])
             break
         except RuntimeError as e:
             print(f"[WAIT] {e}")
