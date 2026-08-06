@@ -99,6 +99,22 @@ Confirmed IDs for the Hà Nội → Hà Tĩnh route sampled:
 IDs (`tranship_bus_time_detail_id`, `boarding_point_id`) should be looked up by name each run
 rather than hard-coded, since they can differ per `bus_time_id`.
 
+## Directions (`xeca_client.DIRECTIONS`)
+Two directions are supported, each with its own default pickup/drop-off names (confirmed by
+the user directly, not scraped):
+- `HN-HT` (Hà Nội → Hà Tĩnh): pickup "493 Nguyễn Trãi" (home zone), drop-off
+  "VP THẠCH HÀ - HT" (fixed point); coastal-route drop-off override "XANH ĐỎ THẠCH LONG - HT".
+- `HT-HN` (Hà Tĩnh → Hà Nội): pickup "VP THẠCH HÀ - HT" (fixed point), drop-off
+  "Số 275 Nguyễn Trãi" (home zone); coastal-route **pickup** override
+  "XANH ĐỎ THẠCH LONG - HT" (the coastal variant swaps out whichever endpoint is in
+  Hà Tĩnh — the drop-off when HT is the destination, the pickup when HT is the origin).
+
+Since a pickup/drop-off point can be either a home-pickup zone (`home_pickup_zone_id`) or a
+fixed stage point (`boarding_point_id`) **regardless of which role (pickup/drop-off) it's
+playing**, `xeca_client.pickup_fields()` / `dropoff_fields()` inspect the resolved point and
+pick the right create-order field pair rather than assuming pickup=zone, drop-off=point (that
+assumption only happened to hold for the one direction first captured).
+
 ## Booking + payment (captured via Chrome DevTools MCP on a live open-sale date)
 
 > **Note:** capturing this flow on 2026-08-06 against the real (already on-sale) date
@@ -203,6 +219,14 @@ payment):
 - Whether there's a webhook/poll endpoint the `complete` page uses to confirm payment status
   after VNPay redirects back with `?ticket=<id>&type=1`.
 - The real `home_pickup_zone_id` / `boarding_point_id` for the "Ven biển HT - Quốc lộ 1 NA"
-  route variant and its "XANH ĐỎ THẠCH LONG - HT" drop-off — not yet looked up against a
-  bus_time actually running that variant (e.g. the 09:00 or 12:30 departures on 08/08/2026
-  both showed "(Ven biển HT- Quốc lộ 1 NA)" in their heading).
+  route variant and its "XANH ĐỎ THẠCH LONG - HT" point — not yet looked up against a bus_time
+  actually running that variant (e.g. the 09:00 or 12:30 departures on 08/08/2026 both showed
+  "(Ven biển HT- Quốc lộ 1 NA)" in their heading). This affects both directions.
+- **`dropoff_fields()`'s home-zone branch (`custArriveZone`) is an educated guess, not
+  verified.** The one live create-order capture we have (`HN-HT`) had a home-zone *pickup*
+  and a fixed-point *drop-off*, so we've only confirmed `homePickupZoneId` /
+  `custBoardingPointId` (pickup side) and `custArrivePointId` (drop-off-as-fixed-point side).
+  The `HT-HN` direction's drop-off ("Số 275 Nguyễn Trãi") is a home zone, so a real booking
+  there will exercise the unverified `custArriveZone` field for the first time — run
+  `--dry-run` first, and ideally re-capture that direction's checkout via Chrome DevTools
+  before trusting it with real money.

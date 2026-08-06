@@ -10,3 +10,7 @@ accounts_2.txt
 DONE|*
 .chrome_profiles/
 .idea/
+
+# Xeca runtime watchlist state (differs per-environment, not source)
+state.json
+state.json.tmp

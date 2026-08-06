@@ -135,10 +135,23 @@ class XecaClient:
         resp.raise_for_status()
         return resp.json().get("data", {})
 
-    def create_order(self, depart_date: int, bus_time_id, bus_hop_id, seat_id: int,
-                      cust_name: str, cust_mobile: str, pickup_name: str,
-                      home_pickup_zone_id, dropoff_name: str, dropoff_point_id,
-                      cust_email: str = "") -> dict:
+    def create_order(self, depart_date: int, bus_time_id, bus_hop_id, seat_ids: list[int],
+                      cust_name: str, cust_mobile: str, pickup_name: str, pickup_point: dict,
+                      dropoff_name: str, dropoff_point: dict, cust_email: str = "") -> dict:
+        detail = {
+            "custPickupAddr": pickup_name,
+            **pickup_fields(pickup_point),
+            "notes": "",
+            "paymentType": PAYMENT_TYPE_ONLINE,
+            "arriveAddrDetail": dropoff_name,
+            "custMobileDetail": cust_mobile,
+            "custNameDetail": cust_name,
+            **dropoff_fields(dropoff_point),
+            "pickupType": 1,
+            "custArriveType": 3,
+            "isShip": 0,
+            "custEmailDetail": cust_email,
+        }
         payload = {
             "departDate": depart_date,
             "busTimeId": str(bus_time_id),
@@ -153,23 +166,7 @@ class XecaClient:
             "srcChannel": DEFAULT_SOURCE_CHANNEL,
             "sendSms": False,
             "pickupType": None,
-            "details": [{
-                "seatId": seat_id,
-                "custPickupAddr": pickup_name,
-                "homePickupZoneId": home_pickup_zone_id,
-                "custBoardingPointId": None,
-                "notes": "",
-                "paymentType": PAYMENT_TYPE_ONLINE,
-                "arriveAddrDetail": dropoff_name,
-                "custMobileDetail": cust_mobile,
-                "custNameDetail": cust_name,
-                "custArriveZone": None,
-                "custArrivePointId": dropoff_point_id,
-                "pickupType": 1,
-                "custArriveType": 3,
-                "isShip": 0,
-                "custEmailDetail": cust_email,
-            }],
+            "details": [{"seatId": seat_id, **detail} for seat_id in seat_ids],
             "buyInsurance": False,
         }
         resp = self.session.post(
@@ -226,21 +223,52 @@ SEAT_FLOOR_LETTER_PRIORITY = [
     ("Tầng 1", "B"),
 ]
 SEAT_NUMBER_PRIORITY = [3, 2, 4, 1, 5, 6]
+SEAT_NUMBER_RANK = {n: i for i, n in enumerate(SEAT_NUMBER_PRIORITY)}
 
-DEFAULT_PICKUP_NAME = "493 Nguyễn Trãi"
-DEFAULT_DROPOFF_NAME = "VP THẠCH HÀ - HT"
-COASTAL_DROPOFF_NAME = "XANH ĐỎ THẠCH LONG - HT"
 COASTAL_ROUTE_KEYWORD = "Ven biển"
 
 PAYMENT_METHOD_ONLINE = 3
 PAYMENT_TYPE_ONLINE = 8
 
+# Per-direction defaults. The "Ven biển HT - Quốc lộ 1 NA" coastal route variant swaps
+# out whichever endpoint sits in Hà Tĩnh — the dropoff when Hà Tĩnh is the destination
+# (HN-HT), or the pickup when Hà Tĩnh is the origin (HT-HN). `coastal_pickup_name` /
+# `coastal_dropoff_name` are null on whichever end doesn't vary.
+DIRECTIONS = {
+    "HN-HT": {
+        "label": "Hà Nội → Hà Tĩnh",
+        "from_province_id": 2,
+        "to_province_id": 3,
+        "default_pickup_name": "493 Nguyễn Trãi",
+        "default_dropoff_name": "VP THẠCH HÀ - HT",
+        "coastal_pickup_name": None,
+        "coastal_dropoff_name": "XANH ĐỎ THẠCH LONG - HT",
+    },
+    "HT-HN": {
+        "label": "Hà Tĩnh → Hà Nội",
+        "from_province_id": 3,
+        "to_province_id": 2,
+        "default_pickup_name": "VP THẠCH HÀ - HT",
+        "default_dropoff_name": "Số 275 Nguyễn Trãi",
+        "coastal_pickup_name": "XANH ĐỎ THẠCH LONG - HT",
+        "coastal_dropoff_name": None,
+    },
+}
 
-def select_seat(seat_map: dict) -> dict | None:
-    """Pick the best seat from a detail-bus-time `seatMap` per the user's stated preference:
-    floor 2 before floor 1, letter E > A (floor 2) / F > B (floor 1), then seat number
-    3 > 2 > 4 > 1 > 5 > 6. Skips auxiliary "P-" seats (type 4) and non-empty seats."""
-    seats_by_area_letter_number = {}
+# Kept for backward compatibility with existing callers on the default direction.
+DEFAULT_PICKUP_NAME = DIRECTIONS["HN-HT"]["default_pickup_name"]
+DEFAULT_DROPOFF_NAME = DIRECTIONS["HN-HT"]["default_dropoff_name"]
+COASTAL_DROPOFF_NAME = DIRECTIONS["HN-HT"]["coastal_dropoff_name"]
+
+
+def get_direction(code: str) -> dict:
+    direction = DIRECTIONS.get(code.upper())
+    if not direction:
+        raise ValueError(f"Chiều '{code}' không hợp lệ. Chọn: {', '.join(DIRECTIONS)}")
+    return direction
+
+
+def _iter_bookable_seats(seat_map: dict):
     for area in seat_map.get("objArea", []):
         area_name = area.get("areaName")
         for row in area.get("objRow", []):
@@ -257,14 +285,60 @@ def select_seat(seat_map: dict) -> dict | None:
                     number = int(name[1:])
                 except ValueError:
                     continue
-                seats_by_area_letter_number[(area_name, letter, number)] = seat
+                yield area_name, letter, number, seat
 
+
+def select_seats(seat_map: dict, quantity: int = 1) -> list[dict]:
+    """Pick `quantity` seats per the user's stated preference:
+    floor 2 before floor 1, letter E > A (floor 2) / F > B (floor 1), then seat number
+    3 > 2 > 4 > 1 > 5 > 6. Skips auxiliary "P-" seats (type 4) and non-empty seats.
+
+    For quantity > 1, prefers a contiguous run of seat numbers within a single
+    (floor, letter) column (adjacent seats) over independently-ranked scattered seats —
+    only falls back to scattered seats if no column has enough of a contiguous block.
+    """
+    by_area_letter = {}
+    by_key = {}
+    for area_name, letter, number, seat in _iter_bookable_seats(seat_map):
+        by_area_letter.setdefault((area_name, letter), {})[number] = seat
+        by_key[(area_name, letter, number)] = seat
+
+    if quantity <= 1:
+        for area_name, letter in SEAT_FLOOR_LETTER_PRIORITY:
+            for number in SEAT_NUMBER_PRIORITY:
+                seat = by_key.get((area_name, letter, number))
+                if seat:
+                    return [seat]
+        return []
+
+    # Try each column, in floor/letter priority order, for a contiguous run of `quantity`.
+    for area_name, letter in SEAT_FLOOR_LETTER_PRIORITY:
+        numbers = by_area_letter.get((area_name, letter), {})
+        if len(numbers) < quantity:
+            continue
+        best_run = None
+        best_score = None
+        sorted_numbers = sorted(numbers)
+        min_n, max_n = sorted_numbers[0], sorted_numbers[-1]
+        for start in range(min_n, max_n - quantity + 2):
+            run = list(range(start, start + quantity))
+            if not all(n in numbers for n in run):
+                continue
+            score = sum(SEAT_NUMBER_RANK.get(n, len(SEAT_NUMBER_PRIORITY)) for n in run)
+            if best_score is None or score < best_score:
+                best_score, best_run = score, run
+        if best_run:
+            return [numbers[n] for n in best_run]
+
+    # No column has a contiguous block big enough — fall back to the best individually
+    # ranked seats across all columns (still respects floor/letter/number priority).
+    ranked = []
     for area_name, letter in SEAT_FLOOR_LETTER_PRIORITY:
         for number in SEAT_NUMBER_PRIORITY:
-            seat = seats_by_area_letter_number.get((area_name, letter, number))
+            seat = by_key.get((area_name, letter, number))
             if seat:
-                return seat
-    return None
+                ranked.append(seat)
+    return ranked[:quantity]
 
 
 def is_coastal_route(bus_time: dict) -> bool:
@@ -277,6 +351,29 @@ def find_boarding_point(points: list[dict], name: str) -> dict | None:
         if p.get("home_pickup_zone_name") == name or p.get("boarding_point_name") == name:
             return p
     return None
+
+
+def pickup_fields(point: dict) -> dict:
+    """A boarding point is either a home-pickup zone (door-to-door, needs
+    homePickupZoneId) or a fixed stage point (a bus office/station, needs
+    custBoardingPointId) — confirmed via a live create-order capture on the
+    Hà Nội→Hà Tĩnh direction, where the pickup was a home zone."""
+    if point.get("home_pickup_zone_id") is not None:
+        return {"homePickupZoneId": point["home_pickup_zone_id"], "custBoardingPointId": None}
+    return {"homePickupZoneId": None, "custBoardingPointId": point.get("boarding_point_id")}
+
+
+def dropoff_fields(point: dict) -> dict:
+    """Mirror of pickup_fields for the drop-off side. The `custArrivePointId` (fixed
+    stage point) case is confirmed via the same live capture. The home-zone case
+    (`custArriveZone`) is NOT verified against a real request — it's inferred from the
+    field being present-but-null in the captured payload — because that capture's
+    drop-off happened to be a fixed point. Double-check with --dry-run (and ideally a
+    fresh DevTools capture) before trusting a real booking whose drop-off is a home zone
+    (e.g. the Hà Tĩnh→Hà Nội direction's "Số 275 Nguyễn Trãi")."""
+    if point.get("home_pickup_zone_id") is not None:
+        return {"custArrivePointId": None, "custArriveZone": point["home_pickup_zone_id"]}
+    return {"custArrivePointId": point.get("boarding_point_id"), "custArriveZone": None}
 
 
 def is_sale_open(special_rules: list[dict], depart_date: int, bus_stage_id) -> tuple[bool, str]:
