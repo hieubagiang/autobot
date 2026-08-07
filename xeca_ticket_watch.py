@@ -16,6 +16,7 @@ import os
 import random
 import sys
 import time
+import traceback
 
 from xeca_client import XecaClient, get_direction, is_sale_open, load_env_file, select_preferred_bus_time, send_telegram_message
 from xeca_state import DEFAULT_STATE_FILE, list_items, update_item
@@ -93,8 +94,14 @@ def poll_watchlist(client: XecaClient, token: str | None, chat_id: str | None, s
             print(f"[ERROR] item {item['id']}: {e}")
             continue
 
-        result = check_once(client, item["depart_date"], direction["from_province_id"],
-                             direction["to_province_id"], only_latest=True)
+        try:
+            result = check_once(client, item["depart_date"], direction["from_province_id"],
+                                 direction["to_province_id"], only_latest=True)
+        except Exception as e:
+            # One item's transient network error must not stop the rest of the watchlist
+            # from being checked this cycle.
+            print(f"[ERROR] item {item['id']}: lỗi khi kiểm tra — {e}")
+            continue
         header = (f"[{item['id']}] {direction['label']} ngày {item['depart_date']} "
                   f"x{item.get('quantity', 1)} vé:")
         text = header + "\n" + "\n".join(result["lines"])
@@ -130,19 +137,28 @@ def main():
     client = XecaClient()
 
     while True:
-        if args.depart_date is not None:
-            direction = get_direction(args.direction)
-            result = check_once(client, args.depart_date, direction["from_province_id"],
-                                 direction["to_province_id"], only_latest=not args.all_times)
-            text = f"[Xeca] {direction['label']} ngày {args.depart_date}:\n" + "\n".join(result["lines"])
-            if result["any_open"]:
-                notify(token, chat_id, "🎉 ĐÃ MỞ BÁN VÉ!\n" + text)
-            elif args.notify_closed:
-                notify(token, chat_id, text)
+        try:
+            if args.depart_date is not None:
+                direction = get_direction(args.direction)
+                result = check_once(client, args.depart_date, direction["from_province_id"],
+                                     direction["to_province_id"], only_latest=not args.all_times)
+                text = f"[Xeca] {direction['label']} ngày {args.depart_date}:\n" + "\n".join(result["lines"])
+                if result["any_open"]:
+                    notify(token, chat_id, "🎉 ĐÃ MỞ BÁN VÉ!\n" + text)
+                elif args.notify_closed:
+                    notify(token, chat_id, text)
+                else:
+                    print(text)
             else:
-                print(text)
-        else:
-            poll_watchlist(client, token, chat_id, args.state_file, args.notify_closed)
+                poll_watchlist(client, token, chat_id, args.state_file, args.notify_closed)
+        except Exception:
+            # This loop backs a long-running systemd service (xeca-watch.service) — an
+            # unexpected error on one cycle must not take the whole service down and stop
+            # checking every other watchlist item until someone notices and restarts it.
+            # For an ad-hoc --once test run, surface the failure loudly instead of hiding it.
+            traceback.print_exc()
+            if args.once:
+                raise
 
         if args.once:
             break

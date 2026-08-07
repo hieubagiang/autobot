@@ -23,6 +23,7 @@ import random
 import sys
 import time
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
 from xeca_client import (
@@ -98,6 +99,20 @@ def resolve_points(client: XecaClient, bus_time: dict, depart_date: int, directi
     return pickup, dropoff, pickup_name, dropoff_name
 
 
+FIND_BEST_BUS_MAX_WORKERS = 8
+
+
+def _fetch_detail(client: XecaClient, depart_date: int, direction: dict, bus_time: dict) -> dict:
+    return client.get_detail_bus_time(
+        depart_date=depart_date,
+        bus_time_id=bus_time["id"],
+        bus_hop_id=bus_time["bus_hop_id"],
+        bus_stage_id=bus_time["bus_stage_id"],
+        from_province_id=direction["from_province_id"],
+        to_province_id=direction["to_province_id"],
+    )
+
+
 def find_best_available_bus(client: XecaClient, depart_date: int, direction: dict, quantity: int = 1,
                              allow_middle_seats: bool = False):
     """Tries EVERY bus_time of the day, in `rank_bus_times()` priority order (regular bus >
@@ -112,7 +127,15 @@ def find_best_available_bus(client: XecaClient, depart_date: int, direction: dic
     Raises SaleNotOpenError if no candidate's sale has opened yet, or NoSeatsAvailableError
     if sale is open but nothing currently has enough matching seats (both retryable —
     callers should wait and try again; NoSeatsAvailableError especially, since seats free up
-    when someone else's ~30 min unpaid hold lapses)."""
+    when someone else's ~30 min unpaid hold lapses).
+
+    On a day with many departures (docs note up to ~41), the old sequential fetch-then-check
+    per candidate meant N request round-trips back-to-back before reaching a candidate that
+    actually had room — costly exactly when "camping" a race for a freed seat is most time
+    sensitive. `detail-bus-time` calls for all candidates are fetched concurrently (bounded
+    by FIND_BEST_BUS_MAX_WORKERS) so wall-clock time is roughly one round-trip instead of N,
+    while the final pick still walks the results in the same rank-priority order as before —
+    fetch order (parallel, unordered) never changes which bus/seat gets chosen."""
     bus_times = client.get_bus_times(depart_date, direction["from_province_id"], direction["to_province_id"])
     if not bus_times:
         raise NoSeatsAvailableError("Không có chuyến nào trong ngày.")
@@ -121,17 +144,22 @@ def find_best_available_bus(client: XecaClient, depart_date: int, direction: dic
     if not candidates:
         raise NoSeatsAvailableError("Tất cả chuyến trong ngày đều đã hết chỗ.")
 
+    details_by_id = {}
+    with ThreadPoolExecutor(max_workers=min(FIND_BEST_BUS_MAX_WORKERS, len(candidates))) as pool:
+        futures = {pool.submit(_fetch_detail, client, depart_date, direction, bt): bt for bt in candidates}
+        for future in as_completed(futures):
+            bus_time = futures[future]
+            try:
+                details_by_id[bus_time["id"]] = future.result()
+            except Exception:
+                pass  # treat like "couldn't confirm this one" — skipped below, not fatal
+
     any_open = False
     last_reason = None
     for bus_time in candidates:
-        detail = client.get_detail_bus_time(
-            depart_date=depart_date,
-            bus_time_id=bus_time["id"],
-            bus_hop_id=bus_time["bus_hop_id"],
-            bus_stage_id=bus_time["bus_stage_id"],
-            from_province_id=direction["from_province_id"],
-            to_province_id=direction["to_province_id"],
-        )
+        detail = details_by_id.get(bus_time["id"])
+        if detail is None:
+            continue
         open_status, reason = is_sale_open(
             detail.get("busStageSpecialRules", []), depart_date, bus_time.get("bus_stage_id"),
         )

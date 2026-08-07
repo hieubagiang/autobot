@@ -23,6 +23,10 @@ INSTANT_RETRY_NOT_OPEN_SECONDS = 60  # sale not open at all — changes ~once/da
 INSTANT_RETRY_SOLD_OUT_SECONDS = 15  # sale open but no matching seat — racing other buyers
 INSTANT_RETRY_ERROR_SECONDS = 30
 INSTANT_EXPIRY_BUFFER_SECONDS = 15
+INSTANT_WARM_UP_LEAD_SECONDS = 8  # fire a cheap GET this long before a hold expires, so the
+# re-lock POST that follows doesn't pay a TCP+TLS handshake on a connection the server almost
+# certainly closed during the ~30 min idle wait — same technique as
+# tqtt_register_batch.warm_up_clients().
 
 
 def add_ticket_request(direction: str, depart_date: int, quantity: int = 1,
@@ -164,6 +168,16 @@ def instant_lock_loop(item_id: str, stop_event, notify,
             if stop_event.wait(INSTANT_RETRY_NOT_OPEN_SECONDS):
                 return
             continue
+        except Exception as e:
+            # A transient error here (network blip, unexpected API shape, ...) is not a
+            # RuntimeError subclass, so without this catch-all it would propagate out of the
+            # loop and silently kill this background thread — ending "always holding a seat"
+            # until someone notices and restarts the bot. Treat it as just another retryable
+            # failure instead, same as the SaleNotOpenError/NoSeatsAvailableError cases above.
+            notify(f"⚠️ [instant {item_id}] Lỗi khi lập kế hoạch: {e} (thử lại sau {INSTANT_RETRY_ERROR_SECONDS}s)")
+            if stop_event.wait(INSTANT_RETRY_ERROR_SECONDS):
+                return
+            continue
 
         try:
             result = execute_booking(
@@ -192,7 +206,15 @@ def instant_lock_loop(item_id: str, stop_event, notify,
                 return
             continue
         wait_seconds = max(10, (expiry_ms / 1000) - time.time() + INSTANT_EXPIRY_BUFFER_SECONDS)
-        if stop_event.wait(wait_seconds):
+
+        lead = min(INSTANT_WARM_UP_LEAD_SECONDS, wait_seconds)
+        if stop_event.wait(wait_seconds - lead):
+            return
+        try:
+            client.get_bus_times(item["depart_date"], direction["from_province_id"], direction["to_province_id"])
+        except Exception:
+            pass  # best-effort — a cold connection at re-lock time costs latency, not correctness
+        if lead and stop_event.wait(lead):
             return
 
     notify(f"🛑 [instant {item_id}] Đã dừng.")
