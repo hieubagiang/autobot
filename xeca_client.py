@@ -187,6 +187,22 @@ class XecaClient:
         resp.raise_for_status()
         return resp.json().get("data", {})
 
+    def get_ticket_detail(self, order_id) -> dict:
+        """`GET /brand-service/v1/ticket/detail-ticket/{order_id}` — the call the `complete`
+        page (`?ticket=<id>&type=1`, see initiate_payment's returnUrl) fires to render order
+        details. Confirmed via live capture (Chrome DevTools MCP, read-only GET, no side
+        effect) against order 14013599 ~24h after its ~30min hold had lapsed unpaid:
+        `{"status": 3, "payment": {"paymentStatus": 1, ...}, ...}`. See
+        `PAYMENT_STATUS_UNPAID` for why only `paymentStatus` (not `status`) is treated as a
+        signal — no confirmed example of a successfully PAID order's shape exists yet."""
+        resp = self.session.get(
+            f"{BASE_URL.replace('/v1', '')}/brand-service/v1/ticket/detail-ticket/{order_id}",
+            params=self._params({}),
+            timeout=20,
+        )
+        resp.raise_for_status()
+        return resp.json().get("data", {})
+
 
 REGULAR_BUS_TYPE_NAME = "Xe giường nằm"
 
@@ -405,6 +421,24 @@ def dropoff_fields(point: dict) -> dict:
     if point.get("home_pickup_zone_id") is not None:
         return {"custArrivePointId": None, "custArriveZone": point["home_pickup_zone_id"], "custArriveType": 1}
     return {"custArrivePointId": point.get("boarding_point_id"), "custArriveZone": None, "custArriveType": 3}
+
+
+PAYMENT_STATUS_UNPAID = 1  # confirmed via live capture (order 14013599, never paid, expired
+# ~24h earlier): payment.paymentStatus == 1. No confirmed example of a PAID order's value
+# exists — would require completing a real payment to observe, which is out of scope for
+# reverse-engineering. So this is only ever used to detect a *change* away from this known
+# baseline (worth a human's attention), never to assert a specific value means "paid".
+
+
+def payment_status_changed(ticket_detail: dict) -> int | None:
+    """Returns the new `payment.paymentStatus` value if it differs from the confirmed-unpaid
+    baseline (worth notifying a human to check/confirm via /paid), or None if it still looks
+    unpaid / the field is missing. Deliberately does not look at the top-level `status` field
+    or claim to know what "paid" looks like — see PAYMENT_STATUS_UNPAID."""
+    payment_status = (ticket_detail.get("payment") or {}).get("paymentStatus")
+    if payment_status is not None and payment_status != PAYMENT_STATUS_UNPAID:
+        return payment_status
+    return None
 
 
 def is_sale_open(special_rules: list[dict], depart_date: int, bus_stage_id) -> tuple[bool, str]:

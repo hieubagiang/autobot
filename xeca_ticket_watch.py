@@ -18,7 +18,15 @@ import sys
 import time
 import traceback
 
-from xeca_client import XecaClient, get_direction, is_sale_open, load_env_file, select_preferred_bus_time, send_telegram_message
+from xeca_client import (
+    XecaClient,
+    get_direction,
+    is_sale_open,
+    load_env_file,
+    payment_status_changed,
+    select_preferred_bus_time,
+    send_telegram_message,
+)
 from xeca_state import DEFAULT_STATE_FILE, list_items, update_item
 
 for _stream in (sys.stdout, sys.stderr):
@@ -80,8 +88,41 @@ def notify(token: str | None, chat_id: str | None, text: str):
         print("[WARN] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID chưa cấu hình, chỉ in ra console.")
 
 
+AWAITING_PAYMENT_STATUSES = ("pending_payment", "instant_holding")
+
+
+def check_payment_status(client: XecaClient, item: dict) -> int | None:
+    """Best-effort nudge, not an authoritative check — see
+    xeca_client.payment_status_changed()'s docstring for why this can only flag a change
+    away from the known-unpaid baseline, never assert that an order IS paid. Returns the
+    changed paymentStatus value, or None if there's nothing to flag (still unpaid, no
+    order_id yet, or the lookup itself failed)."""
+    order_id = item.get("order_id")
+    if not order_id:
+        return None
+    detail = client.get_ticket_detail(order_id)
+    return payment_status_changed(detail)
+
+
+def poll_payment_statuses(client: XecaClient, token: str | None, chat_id: str | None, state_file: str):
+    items = [i for i in list_items(state_file) if i.get("status") in AWAITING_PAYMENT_STATUSES]
+    for item in items:
+        try:
+            changed = check_payment_status(client, item)
+        except Exception as e:
+            print(f"[ERROR] item {item['id']}: lỗi khi kiểm tra trạng thái thanh toán — {e}")
+            continue
+        if changed is not None:
+            notify(token, chat_id,
+                   f"💳 [{item['id']}] Trạng thái thanh toán có vẻ đã thay đổi (paymentStatus={changed}). "
+                   f"Nếu bạn đã thanh toán xong, bấm /paid {item['id']} để dừng tự động giữ/relock ghế "
+                   f"— hệ thống KHÔNG tự đánh dấu đã thanh toán, cần bạn xác nhận.")
+
+
 def poll_watchlist(client: XecaClient, token: str | None, chat_id: str | None, state_file: str,
                     notify_closed: bool):
+    poll_payment_statuses(client, token, chat_id, state_file)
+
     items = [i for i in list_items(state_file) if i.get("status") == "pending"]
     if not items:
         print("[INFO] Watchlist rỗng hoặc không còn vé nào đang chờ (status=pending).")

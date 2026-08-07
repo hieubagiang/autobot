@@ -241,11 +241,41 @@ payment):
 {"seatIds":[29],"action":"unlock","busHopId":2,"busTimeId":17698,"departDate":20260808,"preStatus":"book"}
 ```
 
+### Order/payment status lookup — `GET /brand-service/v1/ticket/detail-ticket/{order_id}`
+Confirmed via live capture (Chrome DevTools MCP, read-only GET, no side effect) on
+2026-08-08: this is the call the `complete` page (`?ticket=<id>&type=1`, the `returnUrl`
+passed to `payment-service/v1/payment`) fires to render order details. Sample response,
+captured against order `14013599` (the one confirmed in "Create-order response" above)
+~24h after its ~30 min hold had lapsed, never paid:
+```json
+{
+  "status": 3,
+  "payment": {"total": "350000", "coupon": "0", "couponId": 0, "code": null,
+              "paymentMethod": 3, "paymentType": 8, "paymentStatus": 1},
+  "departDate": 20260810, "busTimeId": 17698, "code": "mL7mefam",
+  "listSeatNo": ["E3"], "ticketIds": [23551518], "bookExpired": "1786043319000",
+  "infoCustomer": {"name": "Nguyễn Văn Minh", "phone": "0364826228", ...}
+}
+```
+- `payment.paymentStatus: 1` is the confirmed value for "never paid" — `xeca_client.
+  PAYMENT_STATUS_UNPAID`. **No confirmed example of a successfully PAID order exists** —
+  that would require completing a real VNPay payment to observe, which is out of scope for
+  passive reverse-engineering. Do not assume any other specific value means "paid".
+- `status: 3` likely means "expired/cancelled" (this order's hold had long lapsed unpaid),
+  but its full enum (what an active, still-within-hold order looks like; whether "paid"
+  gets its own value distinct from "cancelled") is unconfirmed — not used for anything
+  programmatically for this reason.
+- Because of the above, `xeca_client.payment_status_changed()` / `xeca_ticket_watch.
+  poll_payment_statuses()` only ever *notify* the user that `paymentStatus` deviated from
+  the known-unpaid baseline (something to go check), and never auto-transition an item's
+  watchlist status to "paid" — a wrong guess here would silently turn off seat-hold
+  protection (relock) on an order that's actually still unpaid.
+
 ### Open items still not covered
 - Whether `payment-service/v1/payment` ever returns a QR image/base64 alongside
   `redirect_url`, or a Momo/COD provider value — only `provider: "vnpay"` observed so far.
-- Whether there's a webhook/poll endpoint the `complete` page uses to confirm payment status
-  after VNPay redirects back with `?ticket=<id>&type=1`.
+- What a successfully PAID order's `detail-ticket` response looks like (see above) — the
+  one open item that would need an actual completed real-money payment to resolve.
 - The real `home_pickup_zone_id` / `boarding_point_id` for the "Ven biển HT - Quốc lộ 1 NA"
   route variant and its "XANH ĐỎ THẠCH LONG - HT" point — not yet looked up against a bus_time
   actually running that variant (e.g. the 09:00 or 12:30 departures on 08/08/2026 both showed
