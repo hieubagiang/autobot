@@ -1,0 +1,240 @@
+[
+ {
+  "name_vi": "Thành phố Hà Nội",
+  "name_en": "Ha Noi City",
+  "value": "Ha_noi",
+  "slug": "ha-noi",
+  "code": "11"
+ },
+ {
+  "name_vi": "Thành phố Hồ Chí Minh",
+  "name_en": "Ho Chi Minh City",
+  "value": "Ho_chi_minh",
+  "slug": "ho-chi-minh",
+  "code": "12"
+ },
+ {
+  "name_vi": "Thành phố Hải Phòng",
+  "name_en": "Hai Phong City",
+  "value": "Hai_phong",
+  "slug": "hai-phong",
+  "code": "14"
+ },
+ {
+  "name_vi": "Thành phố Đà Nẵng",
+  "name_en": "Da Nang City",
+  "value": "Da_nang",
+  "slug": "da-nang",
+  "code": "13"
+ },
+ {
+  "name_vi": "Thành phố Cần Thơ",
+  "name_en": "Can Tho City",
+  "value": "Can_tho",
+  "slug": "can-tho",
+  "code": "15"
+ },
+ {
+  "name_vi": "Thành phố Huế",
+  "name_en": "Hue City",
+  "value": "Hue",
+  "slug": "hue",
+  "code": "16"
+ },
+ {
+  "name_vi": "An Giang",
+  "name_en": "An Giang",
+  "value": "An_giang",
+  "slug": "an-giang",
+  "code": "17"
+ },
+ {
+  "name_vi": "Bắc Ninh",
+  "name_en": "Bac Ninh",
+  "value": "Bac_ninh",
+  "slug": "bac-ninh",
+  "code": "18"
+ },
+ {
+  "name_vi": "Cà Mau",
+  "name_en": "Ca Mau",
+  "value": "Ca_mau",
+  "slug": "ca-mau",
+  "code": "19"
+ },
+ {
+  "name_vi": "Cao Bằng",
+  "name_en": "Cao Bang",
+  "value": "Cao_bang",
+  "slug": "cao-bang",
+  "code": "20"
+ },
+ {
+  "name_vi": "Đắk Lắk",
+  "name_en": "Dak Lak",
+  "value": "Dak_lak",
+  "slug": "dak-lak",
+  "code": "21"
+ },
+ {
+  "name_vi": "Điện Biên",
+  "name_en": "Dien Bien",
+  "value": "Dien_bien",
+  "slug": "dien-bien",
+  "code": "22"
+ },
+ {
+  "name_vi": "Đồng Nai",
+  "name_en": "Dong Nai",
+  "value": "Dong_nai",
+  "slug": "dong-nai",
+  "code": "23"
+ },
+ {
+  "name_vi": "Đồng Tháp",
+  "name_en": "Dong Thap",
+  "value": "Dong_thap",
+  "slug": "dong-thap",
+  "code": "24"
+ },
+ {
+  "name_vi": "Gia Lai",
+  "name_en": "Gia Lai",
+  "value": "Gia_lai",
+  "slug": "gia-lai",
+  "code": "25"
+ },
+ {
+  "name_vi": "Hà Tĩnh",
+  "name_en": "Ha Tinh",
+  "value": "Ha_tinh",
+  "slug": "ha-tinh",
+  "code": "26"
+ },
+ {
+  "name_vi": "Hưng Yên",
+  "name_en": "Hung Yen",
+  "value": "Hung_yen",
+  "slug": "hung-yen",
+  "code": "27"
+ },
+ {
+  "name_vi": "Khánh Hòa",
+  "name_en": "Khanh Hoa",
+  "value": "Khanh_hoa",
+  "slug": "khanh-hoa",
+  "code": "28"
+ },
+ {
+  "name_vi": "Lai Châu",
+  "name_en": "Lai Chau",
+  "value": "Lai_chau",
+  "slug": "lai-chau",
+  "code": "29"
+ },
+ {
+  "name_vi": "Lâm Đồng",
+  "name_en": "Lam Dong",
+  "value": "Lam_dong",
+  "slug": "lam-dong",
+  "code": "30"
+ },
+ {
+  "name_vi": "Lạng Sơn",
+  "name_en": "Lang Son",
+  "value": "Lang_son",
+  "slug": "lang-son",
+  "code": "31"
+ },
+ {
+  "name_vi": "Lào Cai",
+  "name_en": "Lao Cai",
+  "value": "Lao_cai",
+  "slug": "lao-cai",
+  "code": "32"
+ },
+ {
+  "name_vi": "Nghệ An",
+  "name_en": "Nghe An",
+  "value": "Nghe_an",
+  "slug": "nghe-an",
+  "code": "33"
+ },
+ {
+  "name_vi": "Ninh Bình",
+  "name_en": "Ninh Binh",
+  "value": "Ninh_binh",
+  "slug": "ninh-binh",
+  "code": "34"
+ },
+ {
+  "name_vi": "Phú Thọ",
+  "name_en": "Phu Tho",
+  "value": "Phu_tho",
+  "slug": "phu-tho",
+  "code": "35"
+ },
+ {
+  "name_vi": "Quảng Ngãi",
+  "name_en": "Quang Ngai",
+  "value": "Quang_ngai",
+  "slug": "quang-ngai",
+  "code": "36"
+ },
+ {
+  "name_vi": "Quảng Ninh",
+  "name_en": "Quang Ninh",
+  "value": "Quang_ninh",
+  "slug": "quang-ninh",
+  "code": "37"
+ },
+ {
+  "name_vi": "Quảng Trị",
+  "name_en": "Quang Tri",
+  "value": "Quang_tri",
+  "slug": "quang-tri",
+  "code": "38"
+ },
+ {
+  "name_vi": "Sơn La",
+  "name_en": "Son La",
+  "value": "Son_la",
+  "slug": "son-la",
+  "code": "39"
+ },
+ {
+  "name_vi": "Tây Ninh",
+  "name_en": "Tay Ninh",
+  "value": "Tay_ninh",
+  "slug": "tay-ninh",
+  "code": "40"
+ },
+ {
+  "name_vi": "Thái Nguyên",
+  "name_en": "Thai Nguyen",
+  "value": "Thai_nguyen",
+  "slug": "thai-nguyen",
+  "code": "41"
+ },
+ {
+  "name_vi": "Thanh Hóa",
+  "name_en": "Thanh Hoa",
+  "value": "Thanh_hoa",
+  "slug": "thanh-hoa",
+  "code": "42"
+ },
+ {
+  "name_vi": "Tuyên Quang",
+  "name_en": "Tuyen Quang",
+  "value": "Tuyen_quang",
+  "slug": "tuyen-quang",
+  "code": "43"
+ },
+ {
+  "name_vi": "Vĩnh Long",
+  "name_en": "Vinh Long",
+  "value": "Vinh_long",
+  "slug": "vinh-long",
+  "code": "44"
+ }
+]

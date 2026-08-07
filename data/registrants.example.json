@@ -1,0 +1,13 @@
+[
+  {
+    "name": "NGUYỄN VĂN A",
+    "email": "a@example.com",
+    "identifier": "001234567890",
+    "phone": "0912345678",
+    "date_of_birth": "1995",
+    "living_area": "Ha_noi",
+    "ward": "267",
+    "priority_group": "none",
+    "agree_receive_info": true
+  }
+]

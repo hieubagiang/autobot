@@ -14,3 +14,6 @@ DONE|*
 # Xeca runtime watchlist state (differs per-environment, not source)
 state.json
 state.json.tmp
+
+# TQTT registrants chứa CCCD/SĐT/email THẬT — không commit, xem data/tqtt_registrants.example.json
+data/registrants.json
