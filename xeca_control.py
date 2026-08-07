@@ -29,6 +29,12 @@ INSTANT_WARM_UP_LEAD_SECONDS = 8  # fire a cheap GET this long before a hold exp
 # tqtt_register_batch.warm_up_clients().
 INSTANT_REMINDER_LEAD_SECONDS = 300  # nudge the user this long before a hold expires, so a
 # forgotten payment doesn't quietly lapse — never auto-detected as "paid", just a heads-up.
+INSTANT_CAMP_NOTIFY_INTERVAL_SECONDS = 300  # while continuously camping a sold-out date,
+# only re-notify this often — the retry loop itself still polls every
+# INSTANT_RETRY_SOLD_OUT_SECONDS regardless, this only throttles how often we tell the user
+# about it, since notifying on every single 15s retry (up to 240/hour) risks tripping
+# Telegram's own flood limit — which, ironically, would then hit the exact failure mode
+# _safe_notify() below exists to survive.
 
 
 def add_ticket_request(direction: str, depart_date: int, quantity: int = 1,
@@ -132,76 +138,118 @@ def instant_lock_loop(item_id: str, stop_event, notify,
     customers/bots, worth polling tightly) and slow (INSTANT_RETRY_NOT_OPEN_SECONDS) when
     sale isn't open at all (changes ~once/day, no rush).
 
+    If called for an item that's already `instant_holding` with an unexpired
+    `booking.hold_expiry_ms` (e.g. this loop is being resumed after a bot restart via
+    xeca_telegram_bot.resume_instant_items), resumes waiting on that existing hold instead
+    of immediately locking a brand new seat — otherwise every restart would abandon a
+    perfectly good hold and create a redundant real order on Văn Minh's system.
+
     Imported lazily (not at module top) to avoid a xeca_auto_book <-> xeca_control import
     cycle, since xeca_auto_book already imports xeca_state directly."""
     from xeca_auto_book import NoSeatsAvailableError, SaleNotOpenError, execute_booking, plan_booking
     from xeca_state import get_passenger_info
 
+    def _safe_notify(text: str):
+        # `notify` is Bot.send(), which does resp.raise_for_status() on the Telegram API
+        # call — a flood-limit 429 or any other transient Telegram error would otherwise
+        # propagate straight out of this loop and silently kill the background thread,
+        # exactly the failure mode the plan_booking/execute_booking except-blocks below
+        # already guard against. A notification failing to send must never do that.
+        try:
+            notify(text)
+        except Exception as e:
+            print(f"[WARN] [instant {item_id}] Gửi Telegram thất bại (không ảnh hưởng vòng lặp): {e}")
+
     client = XecaClient()
+    last_camp_notify = 0.0
     while not stop_event.is_set():
         item = get_item(item_id, state_file)
         if not item or not item.get("instant"):
             return
         direction = get_direction(item["direction"])
 
-        cust_name, cust_mobile = get_passenger_info(state_file)
-        if not cust_name or not cust_mobile:
-            notify(f"⚠️ [instant {item_id}] Thiếu thông tin hành khách (/passenger) — tạm dừng, thử lại sau {INSTANT_RETRY_ERROR_SECONDS}s.")
-            if stop_event.wait(INSTANT_RETRY_ERROR_SECONDS):
-                return
-            continue
-
-        try:
-            plan = plan_booking(client, item["depart_date"], direction, item.get("quantity", 1),
-                                 item.get("pickup_name"), item.get("dropoff_name"),
-                                 allow_middle_seats=True)
-        except SaleNotOpenError as e:
-            notify(f"⏳ [instant {item_id}] {e} (thử lại sau {INSTANT_RETRY_NOT_OPEN_SECONDS}s)")
-            if stop_event.wait(INSTANT_RETRY_NOT_OPEN_SECONDS):
-                return
-            continue
-        except NoSeatsAvailableError as e:
-            notify(f"🏕️ [instant {item_id}] Đang camp — {e} (thử lại sau {INSTANT_RETRY_SOLD_OUT_SECONDS}s)")
-            if stop_event.wait(INSTANT_RETRY_SOLD_OUT_SECONDS):
-                return
-            continue
-        except RuntimeError as e:
-            notify(f"⏳ [instant {item_id}] Chưa giữ được ghế: {e} (thử lại sau {INSTANT_RETRY_NOT_OPEN_SECONDS}s)")
-            if stop_event.wait(INSTANT_RETRY_NOT_OPEN_SECONDS):
-                return
-            continue
-        except Exception as e:
-            # A transient error here (network blip, unexpected API shape, ...) is not a
-            # RuntimeError subclass, so without this catch-all it would propagate out of the
-            # loop and silently kill this background thread — ending "always holding a seat"
-            # until someone notices and restarts the bot. Treat it as just another retryable
-            # failure instead, same as the SaleNotOpenError/NoSeatsAvailableError cases above.
-            notify(f"⚠️ [instant {item_id}] Lỗi khi lập kế hoạch: {e} (thử lại sau {INSTANT_RETRY_ERROR_SECONDS}s)")
-            if stop_event.wait(INSTANT_RETRY_ERROR_SECONDS):
-                return
-            continue
-
-        try:
-            result = execute_booking(
-                client, plan, direction, item["depart_date"], cust_name, cust_mobile,
-                None, None, open_browser=False,
-                message_prefix="🔒 [instant] Đã tự động giữ ghế (chưa thanh toán):",
-            )
-        except Exception as e:
-            notify(f"⚠️ [instant {item_id}] Lỗi khi giữ ghế: {e} (thử lại sau {INSTANT_RETRY_ERROR_SECONDS}s)")
-            if stop_event.wait(INSTANT_RETRY_ERROR_SECONDS):
-                return
-            continue
-
-        update_item(item_id, path=state_file, status="instant_holding", order_id=result["order_id"],
-                    booking=result["booking"])
-        seat_names = ", ".join(s["seatDisplayName"] for s in plan["seats"])
-        expiry_ms = result["expiry"].get("expiredTime")
-        notify(
-            f"🔒 [instant {item_id}] Đã giữ ghế {seat_names}. Link: {result['payment_url']}\n"
-            f"Thanh toán xong thì /paid {item_id} (sẽ dừng tự relock). "
-            f"Chưa thanh toán thì cứ để đó, hết hạn tôi tự giữ lại. /instant {item_id} off để dừng hẳn."
+        # A hold from before a bot restart (xeca_telegram_bot.resume_instant_items runs this
+        # loop fresh on every startup) may still be valid — resuming it instead of always
+        # re-locking from scratch avoids abandoning a good hold and creating a redundant new
+        # order, which is still a real side effect on Văn Minh's system each time.
+        existing_booking = item.get("booking") or {}
+        existing_expiry_ms = existing_booking.get("hold_expiry_ms")
+        resuming_valid_hold = (
+            item.get("status") == "instant_holding"
+            and existing_expiry_ms
+            and existing_expiry_ms / 1000 - time.time() > INSTANT_EXPIRY_BUFFER_SECONDS
         )
+
+        if resuming_valid_hold:
+            seat_names = ", ".join(existing_booking.get("seat_names") or [])
+            payment_url = existing_booking.get("payment_url")
+            expiry_ms = existing_expiry_ms
+        else:
+            cust_name, cust_mobile = get_passenger_info(state_file)
+            if not cust_name or not cust_mobile:
+                _safe_notify(f"⚠️ [instant {item_id}] Thiếu thông tin hành khách (/passenger) — tạm dừng, thử lại sau {INSTANT_RETRY_ERROR_SECONDS}s.")
+                if stop_event.wait(INSTANT_RETRY_ERROR_SECONDS):
+                    return
+                continue
+
+            try:
+                plan = plan_booking(client, item["depart_date"], direction, item.get("quantity", 1),
+                                     item.get("pickup_name"), item.get("dropoff_name"),
+                                     allow_middle_seats=True)
+            except SaleNotOpenError as e:
+                _safe_notify(f"⏳ [instant {item_id}] {e} (thử lại sau {INSTANT_RETRY_NOT_OPEN_SECONDS}s)")
+                if stop_event.wait(INSTANT_RETRY_NOT_OPEN_SECONDS):
+                    return
+                continue
+            except NoSeatsAvailableError as e:
+                # Retry every INSTANT_RETRY_SOLD_OUT_SECONDS regardless (that's the race), but
+                # only *notify* about it every INSTANT_CAMP_NOTIFY_INTERVAL_SECONDS — see that
+                # constant's comment for why spamming a message per retry is actively harmful.
+                now = time.time()
+                if now - last_camp_notify >= INSTANT_CAMP_NOTIFY_INTERVAL_SECONDS:
+                    _safe_notify(f"🏕️ [instant {item_id}] Đang camp — {e} (đang thử lại mỗi {INSTANT_RETRY_SOLD_OUT_SECONDS}s)")
+                    last_camp_notify = now
+                if stop_event.wait(INSTANT_RETRY_SOLD_OUT_SECONDS):
+                    return
+                continue
+            except RuntimeError as e:
+                _safe_notify(f"⏳ [instant {item_id}] Chưa giữ được ghế: {e} (thử lại sau {INSTANT_RETRY_NOT_OPEN_SECONDS}s)")
+                if stop_event.wait(INSTANT_RETRY_NOT_OPEN_SECONDS):
+                    return
+                continue
+            except Exception as e:
+                # A transient error here (network blip, unexpected API shape, ...) is not a
+                # RuntimeError subclass, so without this catch-all it would propagate out of the
+                # loop and silently kill this background thread — ending "always holding a seat"
+                # until someone notices and restarts the bot. Treat it as just another retryable
+                # failure instead, same as the SaleNotOpenError/NoSeatsAvailableError cases above.
+                _safe_notify(f"⚠️ [instant {item_id}] Lỗi khi lập kế hoạch: {e} (thử lại sau {INSTANT_RETRY_ERROR_SECONDS}s)")
+                if stop_event.wait(INSTANT_RETRY_ERROR_SECONDS):
+                    return
+                continue
+
+            try:
+                result = execute_booking(
+                    client, plan, direction, item["depart_date"], cust_name, cust_mobile,
+                    None, None, open_browser=False,
+                    message_prefix="🔒 [instant] Đã tự động giữ ghế (chưa thanh toán):",
+                )
+            except Exception as e:
+                _safe_notify(f"⚠️ [instant {item_id}] Lỗi khi giữ ghế: {e} (thử lại sau {INSTANT_RETRY_ERROR_SECONDS}s)")
+                if stop_event.wait(INSTANT_RETRY_ERROR_SECONDS):
+                    return
+                continue
+
+            update_item(item_id, path=state_file, status="instant_holding", order_id=result["order_id"],
+                        booking=result["booking"])
+            seat_names = ", ".join(s["seatDisplayName"] for s in plan["seats"])
+            payment_url = result["payment_url"]
+            expiry_ms = result["expiry"].get("expiredTime")
+            _safe_notify(
+                f"🔒 [instant {item_id}] Đã giữ ghế {seat_names}. Link: {payment_url}\n"
+                f"Thanh toán xong thì /paid {item_id} (sẽ dừng tự relock). "
+                f"Chưa thanh toán thì cứ để đó, hết hạn tôi tự giữ lại. /instant {item_id} off để dừng hẳn."
+            )
 
         if not expiry_ms:
             if stop_event.wait(INSTANT_RETRY_ERROR_SECONDS):
@@ -213,10 +261,10 @@ def instant_lock_loop(item_id: str, stop_event, notify,
         if wait_seconds > reminder_lead:
             if stop_event.wait(wait_seconds - reminder_lead):
                 return
-            notify(
+            _safe_notify(
                 f"⏰ [instant {item_id}] Ghế {seat_names} sắp hết hạn giữ chỗ trong "
                 f"~{int(reminder_lead // 60)} phút. Thanh toán ngay nếu muốn giữ ghế này: "
-                f"{result['payment_url']}\nChưa thanh toán thì cứ để đó, hết hạn tôi tự giữ lại."
+                f"{payment_url}\nChưa thanh toán thì cứ để đó, hết hạn tôi tự giữ lại."
             )
             wait_seconds = reminder_lead
 
@@ -230,4 +278,4 @@ def instant_lock_loop(item_id: str, stop_event, notify,
         if lead and stop_event.wait(lead):
             return
 
-    notify(f"🛑 [instant {item_id}] Đã dừng.")
+    _safe_notify(f"🛑 [instant {item_id}] Đã dừng.")
