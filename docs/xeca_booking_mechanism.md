@@ -258,9 +258,22 @@ captured against order `14013599` (the one confirmed in "Create-order response" 
 }
 ```
 - `payment.paymentStatus: 1` is the confirmed value for "never paid" — `xeca_client.
-  PAYMENT_STATUS_UNPAID`. **No confirmed example of a successfully PAID order exists** —
-  that would require completing a real VNPay payment to observe, which is out of scope for
-  passive reverse-engineering. Do not assume any other specific value means "paid".
+  PAYMENT_STATUS_UNPAID`. Independently confirmed on a second order too: `14013565`
+  (seat C3, code `yPIoaDVw`, the other order captured in "Booking + payment" above) also
+  returns `status: 3, payment.paymentStatus: 1`. **No confirmed example of a successfully
+  PAID order exists** — that would require completing a real VNPay payment to observe,
+  which is out of scope for passive reverse-engineering. Do not assume any other specific
+  value means "paid".
+- The `type` query param on the `complete` page URL (`?ticket=<id>&type=1` vs `type=2`)
+  does **not** get forwarded to `detail-ticket` — both fire the exact same
+  `GET .../ticket/detail-ticket/{id}` call with no `type` param, so it's frontend-only
+  (likely which UI copy/route to render), irrelevant to this API.
+- Only ever look up order IDs you created yourself (tracked in this doc / your own
+  `state.json`) — order IDs are NOT scoped to one customer or agency (14013565 and
+  14013599 are 34 apart), so guessing/incrementing IDs would surface other real
+  customers' bookings (name, phone, seat, pickup point). Treat that the same as any other
+  IDOR: out of scope without the site owner's authorization, regardless of it being a
+  read-only GET.
 - `status: 3` likely means "expired/cancelled" (this order's hold had long lapsed unpaid),
   but its full enum (what an active, still-within-hold order looks like; whether "paid"
   gets its own value distinct from "cancelled") is unconfirmed — not used for anything

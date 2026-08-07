@@ -423,11 +423,12 @@ def dropoff_fields(point: dict) -> dict:
     return {"custArrivePointId": point.get("boarding_point_id"), "custArriveZone": None, "custArriveType": 3}
 
 
-PAYMENT_STATUS_UNPAID = 1  # confirmed via live capture (order 14013599, never paid, expired
-# ~24h earlier): payment.paymentStatus == 1. No confirmed example of a PAID order's value
-# exists — would require completing a real payment to observe, which is out of scope for
-# reverse-engineering. So this is only ever used to detect a *change* away from this known
-# baseline (worth a human's attention), never to assert a specific value means "paid".
+PAYMENT_STATUS_UNPAID = 1  # confirmed via live capture on two independent expired, never-
+# paid orders (14013599 and 14013565): payment.paymentStatus == 1 both times. No confirmed
+# example of a PAID order's value exists — would require completing a real payment to
+# observe, which is out of scope for reverse-engineering. So this is only ever used to
+# detect a *change* away from this known baseline (worth a human's attention), never to
+# assert a specific value means "paid".
 
 
 def payment_status_changed(ticket_detail: dict) -> int | None:
