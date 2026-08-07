@@ -75,6 +75,7 @@ BOT_COMMANDS = [
     {"command": "setpassenger", "description": "Đổi tên/SĐT hành khách: <sđt> <tên>"},
     {"command": "logs", "description": "Xem log gần nhất"},
     {"command": "restart", "description": "Khởi động lại service theo dõi"},
+    {"command": "tqtt", "description": "Trạng thái đăng ký TQTT (is_open + service)"},
     {"command": "help", "description": "Danh sách lệnh"},
 ]
 
@@ -290,6 +291,7 @@ class Bot:
             "/stop": lambda r: service_control("stop"),
             "/restart": lambda r: service_control("restart"),
             "/logs": self.cmd_logs,
+            "/tqtt": lambda r: self.cmd_tqtt(),
             "/help": lambda r: self.cmd_help(),
         }
         if cmd == "/start" and rest.strip() == "":
@@ -315,7 +317,8 @@ class Bot:
             "/passenger — xem tên/SĐT hành khách hiện tại\n"
             "/setpassenger <sđt> <tên> — đổi tên/SĐT hành khách dùng khi đặt vé thật\n"
             "/start /stop /restart — điều khiển service theo dõi\n"
-            "/logs [n]"
+            "/logs [n]\n"
+            "/tqtt — trạng thái đăng ký TQTT (is_open + service)"
         )
 
     def cmd_passenger(self) -> str:
@@ -422,6 +425,23 @@ class Bot:
             return "(không có log)"
         self.send(f"<pre>{html.escape(logs[-3500:])}</pre>", parse_mode="HTML")
         return ""
+
+    def cmd_tqtt(self) -> str:
+        try:
+            from tqtt_client import TqttClient
+            capacity = TqttClient().get_capacity()
+        except Exception as e:
+            return f"❌ Lỗi khi gọi API TQTT: {e}"
+
+        from xeca_control import systemctl_is_active
+        is_open = capacity.get("is_open")
+        icon = "✅ ĐÃ MỞ ĐĂNG KÝ" if is_open else "🔒 Chưa mở"
+        return (
+            f"{icon}\n"
+            f"is_open={is_open} | capacity_valid={capacity.get('capacity_valid')}\n"
+            f"tqtt-watch.service: {systemctl_is_active('tqtt-watch.service')}\n"
+            f"tqtt-register.service: {systemctl_is_active('tqtt-register.service')}"
+        )
 
     def cmd_book(self, rest: str) -> str:
         item_id = rest.strip()
