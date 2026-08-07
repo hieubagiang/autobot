@@ -1,0 +1,46 @@
+[
+  {
+    "name": "PHẠM THỊ NGA",
+    "email": "phamnga1301@gmail.com",
+    "identifier": "042194004744",
+    "phone": "0773386467",
+    "date_of_birth": "1994",
+    "living_area": "Ha_tinh",
+    "ward": "12314",
+    "priority_group": "none",
+    "agree_receive_info": false
+  },
+  {
+    "name": "PHẠM THỊ THỤC CHINH",
+    "email": "phamthucchinh0201@gmail.com",
+    "identifier": "042300012481",
+    "phone": "0987351051",
+    "date_of_birth": "2000",
+    "living_area": "Ha_tinh",
+    "ward": "12314",
+    "priority_group": "none",
+    "agree_receive_info": false
+  },
+  {
+    "name": "TRẦN THỊ XUÂN",
+    "email": "tranxuankttc@gmail.com",
+    "identifier": "040194019292",
+    "phone": "0336767106",
+    "date_of_birth": "1994",
+    "living_area": "Nghe_an",
+    "ward": "26145",
+    "priority_group": "none",
+    "agree_receive_info": false
+  },
+  {
+    "name": "PHẠM DOÃN HIẾU",
+    "email": "phamdoanhieu@gmail.com",
+    "identifier": "042200012714",
+    "phone": "0941716670",
+    "date_of_birth": "2000",
+    "living_area": "Ha_tinh",
+    "ward": "12570",
+    "priority_group": "none",
+    "agree_receive_info": false
+  }
+]
