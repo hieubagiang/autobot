@@ -119,9 +119,38 @@ def poll_payment_statuses(client: XecaClient, token: str | None, chat_id: str | 
                    f"— hệ thống KHÔNG tự đánh dấu đã thanh toán, cần bạn xác nhận.")
 
 
+EXPIRY_REMINDER_LEAD_SECONDS = 300  # nudge the user this long before a hold expires
+
+
+def poll_expiry_reminders(token: str | None, chat_id: str | None, state_file: str):
+    """One-time "hết hạn sắp tới" nudge for plain one-shot bookings (status=pending_payment,
+    from /book + /confirm) that no background thread is actively watching — unlike
+    instant_holding items, which get the same nudge with tighter precision straight from
+    xeca_control.instant_lock_loop's own wait timer. Relies on hold_expiry_ms/
+    expiry_reminder_sent being persisted on the booking snapshot (xeca_auto_book.
+    booking_snapshot); this poll's own interval (default 300s) is coarse, so this is a
+    best-effort heads-up, not a precise T-minus-5:00 alarm."""
+    items = [i for i in list_items(state_file) if i.get("status") == "pending_payment"]
+    now = time.time()
+    for item in items:
+        booking = item.get("booking") or {}
+        expiry_ms = booking.get("hold_expiry_ms")
+        if not expiry_ms or booking.get("expiry_reminder_sent"):
+            continue
+        remaining = expiry_ms / 1000 - now
+        if remaining > EXPIRY_REMINDER_LEAD_SECONDS:
+            continue
+        if remaining > 0:
+            notify(token, chat_id,
+                   f"⏰ [{item['id']}] Ghế sắp hết hạn giữ chỗ trong ~{max(1, int(remaining // 60))} phút. "
+                   f"Link thanh toán: {booking.get('payment_url')}")
+        update_item(item["id"], path=state_file, booking={**booking, "expiry_reminder_sent": True})
+
+
 def poll_watchlist(client: XecaClient, token: str | None, chat_id: str | None, state_file: str,
                     notify_closed: bool):
     poll_payment_statuses(client, token, chat_id, state_file)
+    poll_expiry_reminders(token, chat_id, state_file)
 
     items = [i for i in list_items(state_file) if i.get("status") == "pending"]
     if not items:

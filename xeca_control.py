@@ -27,6 +27,8 @@ INSTANT_WARM_UP_LEAD_SECONDS = 8  # fire a cheap GET this long before a hold exp
 # re-lock POST that follows doesn't pay a TCP+TLS handshake on a connection the server almost
 # certainly closed during the ~30 min idle wait — same technique as
 # tqtt_register_batch.warm_up_clients().
+INSTANT_REMINDER_LEAD_SECONDS = 300  # nudge the user this long before a hold expires, so a
+# forgotten payment doesn't quietly lapse — never auto-detected as "paid", just a heads-up.
 
 
 def add_ticket_request(direction: str, depart_date: int, quantity: int = 1,
@@ -206,6 +208,17 @@ def instant_lock_loop(item_id: str, stop_event, notify,
                 return
             continue
         wait_seconds = max(10, (expiry_ms / 1000) - time.time() + INSTANT_EXPIRY_BUFFER_SECONDS)
+
+        reminder_lead = min(INSTANT_REMINDER_LEAD_SECONDS, wait_seconds)
+        if wait_seconds > reminder_lead:
+            if stop_event.wait(wait_seconds - reminder_lead):
+                return
+            notify(
+                f"⏰ [instant {item_id}] Ghế {seat_names} sắp hết hạn giữ chỗ trong "
+                f"~{int(reminder_lead // 60)} phút. Thanh toán ngay nếu muốn giữ ghế này: "
+                f"{result['payment_url']}\nChưa thanh toán thì cứ để đó, hết hạn tôi tự giữ lại."
+            )
+            wait_seconds = reminder_lead
 
         lead = min(INSTANT_WARM_UP_LEAD_SECONDS, wait_seconds)
         if stop_event.wait(wait_seconds - lead):

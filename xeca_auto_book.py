@@ -234,10 +234,17 @@ def describe_plan(plan: dict, direction: dict) -> str:
 
 
 def booking_snapshot(plan: dict, direction: dict, order_id, cust_name: str, cust_mobile: str,
-                      expiry_text: str, payment_url: str | None) -> dict:
+                      expiry_text: str, payment_url: str | None, expiry_ms: int | None = None) -> dict:
     """Full ticket details worth persisting onto the watchlist item once a booking
     succeeds, so /list and /status can show everything (passenger, times, price, seat,
-    pickup/drop-off) without the user having to dig up the original Telegram message."""
+    pickup/drop-off) without the user having to dig up the original Telegram message.
+
+    `hold_expiry_ms` (the raw Unix-ms deadline, alongside the human-readable `hold_expiry`
+    text) and `expiry_reminder_sent` let xeca_ticket_watch.poll_expiry_reminders() send a
+    one-time "hết hạn sắp tới" nudge for plain one-shot bookings — instant-lock holds get
+    the same nudge from inside xeca_control.instant_lock_loop instead, which already tracks
+    the deadline precisely, so this flag naturally resets every re-lock cycle since a fresh
+    booking dict replaces the old one each time."""
     bt = plan["bus_time"]
     return {
         "order_id": order_id,
@@ -252,6 +259,8 @@ def booking_snapshot(plan: dict, direction: dict, order_id, cust_name: str, cust
         "pickup_name": plan["pickup_name"],
         "dropoff_name": plan["dropoff_name"],
         "hold_expiry": expiry_text,
+        "hold_expiry_ms": expiry_ms,
+        "expiry_reminder_sent": False,
         "payment_url": payment_url,
     }
 
@@ -312,7 +321,8 @@ def execute_booking(client: XecaClient, plan: dict, direction: dict, depart_date
         except Exception as e:
             print(f"[WARN] Không mở được trình duyệt tự động: {e}")
 
-    booking = booking_snapshot(plan, direction, order_id, cust_name, cust_mobile, expiry_text, payment_url)
+    booking = booking_snapshot(plan, direction, order_id, cust_name, cust_mobile, expiry_text, payment_url,
+                                expiry_ms=expiry.get("expiredTime"))
     return {"order_id": order_id, "expiry": expiry, "payment_url": payment_url, "booking": booking}
 
 
