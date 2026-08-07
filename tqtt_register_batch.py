@@ -79,10 +79,38 @@ def submit_one(entry: dict) -> tuple[str, bool, str]:
     return label, False, note
 
 
-def submit_all(resolved: list[dict], max_workers: int) -> list[tuple[str, bool, str]]:
+PRIORITY_HEAD_START_SECONDS = 0.05
+
+
+def reorder_priority(resolved: list[dict], priority_name: str | None) -> list[dict]:
+    """Moves every entry whose name matches `priority_name` (case-insensitive substring)
+    to the front, preserving the relative order of everyone else. Used to make sure a
+    specific person's request is the one that actually reaches the server first when
+    capacity is limited (see PRIORITY_HEAD_START_SECONDS in submit_all)."""
+    if not priority_name:
+        return resolved
+    needle = priority_name.strip().lower()
+    priority = [e for e in resolved if needle in (e["payload"].get("name") or "").lower()]
+    rest = [e for e in resolved if needle not in (e["payload"].get("name") or "").lower()]
+    if not priority:
+        print(f"[WARN] --priority-name '{priority_name}' không khớp ai trong danh sách — bỏ qua.")
+        return resolved
+    return priority + rest
+
+
+def submit_all(resolved: list[dict], max_workers: int, has_priority: bool = False) -> list[tuple[str, bool, str]]:
     results = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(submit_one, entry): entry for entry in resolved}
+        if has_priority:
+            # Fire the priority person's request alone first and give it a brief head
+            # start on the wire before anyone else's connection even opens — submission
+            # order alone (without this) only weakly favors whoever goes first.
+            priority_future = pool.submit(submit_one, resolved[0])
+            time.sleep(PRIORITY_HEAD_START_SECONDS)
+            futures = {priority_future: resolved[0]}
+            futures.update({pool.submit(submit_one, entry): entry for entry in resolved[1:]})
+        else:
+            futures = {pool.submit(submit_one, entry): entry for entry in resolved}
         for future in as_completed(futures):
             results.append(future.result())
     return results
@@ -91,6 +119,8 @@ def submit_all(resolved: list[dict], max_workers: int) -> list[tuple[str, bool, 
 def main():
     parser = argparse.ArgumentParser(description="Submit tqtt.vn registration for multiple people in parallel when it opens")
     parser.add_argument("--people-file", default="data/registrants.json")
+    parser.add_argument("--priority-name", default=None,
+                         help="Tên (khớp gần đúng, không phân biệt hoa/thường) được gọi API TRƯỚC những người còn lại")
     parser.add_argument("--interval", type=int, default=5, help="Chu kỳ poll (giây) khi chưa mở, mặc định 5s")
     parser.add_argument("--jitter", type=int, default=2)
     parser.add_argument("--dry-run", action="store_true", default=True, help="(mặc định) chỉ resolve+in payload, KHÔNG submit")
@@ -114,6 +144,10 @@ def main():
         print("[ERROR] Không có người nào resolve hợp lệ, dừng.")
         return
 
+    resolved = reorder_priority(resolved, args.priority_name)
+    if args.priority_name:
+        print(f"[INFO] Ưu tiên gọi API trước cho: {resolved[0]['label']}")
+
     print(f"[INFO] {len(resolved)}/{len(people)} người hợp lệ:")
     for entry in resolved:
         print(f"--- {entry['label']} ---")
@@ -129,7 +163,7 @@ def main():
         capacity = client.get_capacity()
         if capacity.get("is_open"):
             print(f"[OPEN] is_open=true — bắn {len(resolved)} request song song ngay...")
-            results = submit_all(resolved, max_workers=len(resolved))
+            results = submit_all(resolved, max_workers=len(resolved), has_priority=bool(args.priority_name))
             for label, ok, note in results:
                 tag = "[SUCCESS]" if ok else "[FAILED]"
                 print(f"{tag} {label}: {note}")

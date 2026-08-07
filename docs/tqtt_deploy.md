@@ -94,13 +94,20 @@ Type=simple
 WorkingDirectory=/opt/autobot
 Environment=PYTHONIOENCODING=utf-8
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/autobot/venv/bin/python tqtt_register_batch.py --confirm-real-submit
+ExecStart=/opt/autobot/venv/bin/python tqtt_register_batch.py --confirm-real-submit --priority-name "PHẠM THỊ THỤC CHINH"
 Restart=on-failure
 RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+### Ưu tiên 1 người gọi API trước (`--priority-name`)
+Khi bắn song song cho nhiều người, thứ tự request tới được server không đảm bảo nếu chỉ dựa
+vào thread scheduling. `--priority-name "<tên>"` (khớp gần đúng, không phân biệt hoa/thường)
+đưa người đó lên đầu danh sách VÀ cho request của họ một khoảng đầu (`PRIORITY_HEAD_START_SECONDS`
+= 0.05s trong `tqtt_register_batch.py`) trước khi bắn phần còn lại — đảm bảo request của họ
+thực sự rời máy trước, không chỉ "may rủi" theo lịch trình thread.
 
 ```bash
 ssh root@hieuit.top "systemctl daemon-reload && systemctl enable --now tqtt-watch tqtt-register"
