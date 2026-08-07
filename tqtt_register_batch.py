@@ -59,10 +59,11 @@ def resolve_all(people: list[dict]) -> list[dict]:
     return resolved
 
 
-def submit_one(entry: dict) -> tuple[str, bool, str]:
-    """Own TqttClient/session per thread — simplest way to avoid any doubt about
-    thread-safety of a shared requests.Session under real concurrency."""
-    client = TqttClient()
+def submit_one(entry: dict, client: TqttClient) -> tuple[str, bool, str]:
+    """Takes a pre-built, pre-warmed TqttClient (one per person, never shared across
+    threads) rather than creating one here — see `warm_up_clients()`: building a fresh
+    Session at the moment of submission would pay a full TCP+TLS handshake exactly when
+    speed matters most."""
     label = entry["label"]
     try:
         resp = client.submit(entry["payload"])
@@ -100,19 +101,41 @@ def reorder_priority(resolved: list[dict], priority_name: str | None) -> list[di
     return priority + rest
 
 
-def submit_all(resolved: list[dict], max_workers: int, has_priority: bool = False) -> list[tuple[str, bool, str]]:
+def warm_up_clients(clients: list[TqttClient], skip: TqttClient | None = None) -> None:
+    """Sends one cheap GET /concert/capacity through each client's Session, establishing
+    (and keeping alive) the TCP+TLS connection to api.tqtt.vn ahead of time — so the actual
+    POST /concert/submit at the critical moment doesn't pay handshake latency. `skip` lets
+    the poll loop avoid re-warming the session it just used a moment ago for the capacity
+    check itself. Failures here are non-fatal (just means that one client warms up cold
+    at submit time instead)."""
+    for c in clients:
+        if c is skip:
+            continue
+        try:
+            c.get_capacity()
+        except Exception:
+            pass
+
+
+def submit_all(resolved: list[dict], clients: list[TqttClient], has_priority: bool = False) -> list[tuple[str, bool, str]]:
     results = []
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+    with ThreadPoolExecutor(max_workers=len(resolved)) as pool:
         if has_priority:
             # Fire the priority person's request alone first and give it a brief head
             # start on the wire before anyone else's connection even opens — submission
             # order alone (without this) only weakly favors whoever goes first.
-            priority_future = pool.submit(submit_one, resolved[0])
+            priority_future = pool.submit(submit_one, resolved[0], clients[0])
             time.sleep(PRIORITY_HEAD_START_SECONDS)
             futures = {priority_future: resolved[0]}
-            futures.update({pool.submit(submit_one, entry): entry for entry in resolved[1:]})
+            futures.update({
+                pool.submit(submit_one, entry, clients[i]): entry
+                for i, entry in enumerate(resolved[1:], start=1)
+            })
         else:
-            futures = {pool.submit(submit_one, entry): entry for entry in resolved}
+            futures = {
+                pool.submit(submit_one, entry, clients[i]): entry
+                for i, entry in enumerate(resolved)
+            }
         for future in as_completed(futures):
             results.append(future.result())
     return results
@@ -173,13 +196,17 @@ def main():
             # Never let a Telegram hiccup look like the registration itself failed.
             print(f"[WARN] Gửi Telegram thất bại (không ảnh hưởng kết quả đăng ký): {e}")
 
-    client = TqttClient()
+    # One dedicated, pre-warmed TqttClient per person — see warm_up_clients()/submit_one().
+    clients = [TqttClient() for _ in resolved]
+    warm_up_clients(clients)
+    print(f"[INFO] Đã pre-warm {len(clients)} kết nối tới api.tqtt.vn.")
+    poll_client = clients[0]
 
     while True:
-        capacity = client.get_capacity()
+        capacity = poll_client.get_capacity()
         if capacity.get("is_open"):
             notify(f"🎉 tqtt.vn đã mở đăng ký — đang gửi {len(resolved)} yêu cầu song song ngay...")
-            results = submit_all(resolved, max_workers=len(resolved), has_priority=bool(args.priority_name))
+            results = submit_all(resolved, clients, has_priority=bool(args.priority_name))
 
             lines = []
             for label, ok, note in results:
@@ -195,6 +222,9 @@ def main():
         print("[WAIT] Chưa mở đăng ký (is_open=false)")
         if args.once:
             break
+        # Keep everyone else's connection warm too while waiting (poll_client's is already
+        # fresh from the capacity check above) — cheap: len(clients)-1 extra GETs per cycle.
+        warm_up_clients(clients, skip=poll_client)
         sleep_for = args.interval + random.randint(0, max(args.jitter, 0))
         time.sleep(sleep_for)
 

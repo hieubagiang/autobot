@@ -112,6 +112,19 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
+### Pre-warm connection (giảm ~900ms/người)
+`submit_one()` giờ nhận 1 `TqttClient` **đã dựng sẵn** thay vì tự tạo mới lúc submit —
+`warm_up_clients()` gọi `GET /concert/capacity` qua từng session (1 cái/người) ngay từ đầu
+(trước khi vào vòng lặp chờ mở) để bắt tay TCP+TLS trước, và tiếp tục "giữ ấm" các session
+còn lại mỗi chu kỳ poll trong lúc chờ. Đo thực tế trên máy dev:
+```
+Cold (session mới):     918.7 ms
+Warm (session tái dùng): 31.3 ms
+Tiết kiệm: ~887 ms/người
+```
+Tức là tại đúng thời điểm cần nhanh nhất, request thật chỉ còn tốn round-trip thuần, không
+tốn thời gian dựng kết nối — quan trọng vì đây là sự kiện giới hạn suất.
+
 ### Ưu tiên 1 người gọi API trước (`--priority-name`)
 Khi bắn song song cho nhiều người, thứ tự request tới được server không đảm bảo nếu chỉ dựa
 vào thread scheduling. `--priority-name "<tên>"` (khớp gần đúng, không phân biệt hoa/thường)
