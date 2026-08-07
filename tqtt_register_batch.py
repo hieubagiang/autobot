@@ -25,7 +25,9 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from tqtt_client import TqttClient, load_env_file
+import os
+
+from tqtt_client import TqttClient, load_env_file, send_telegram_message
 from tqtt_register import build_payload_from_raw, describe_payload
 
 for _stream in (sys.stdout, sys.stderr):
@@ -157,16 +159,37 @@ def main():
         print("[DRY-RUN] Dừng ở đây, không gọi POST /concert/submit thật. Thêm --confirm-real-submit để submit thật.")
         return
 
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+
+    def notify(text: str):
+        print(text)
+        if not (token and chat_id):
+            print("[WARN] TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID chưa cấu hình, chỉ in console.")
+            return
+        try:
+            send_telegram_message(token, chat_id, text)
+        except Exception as e:
+            # Never let a Telegram hiccup look like the registration itself failed.
+            print(f"[WARN] Gửi Telegram thất bại (không ảnh hưởng kết quả đăng ký): {e}")
+
     client = TqttClient()
 
     while True:
         capacity = client.get_capacity()
         if capacity.get("is_open"):
-            print(f"[OPEN] is_open=true — bắn {len(resolved)} request song song ngay...")
+            notify(f"🎉 tqtt.vn đã mở đăng ký — đang gửi {len(resolved)} yêu cầu song song ngay...")
             results = submit_all(resolved, max_workers=len(resolved), has_priority=bool(args.priority_name))
+
+            lines = []
             for label, ok, note in results:
-                tag = "[SUCCESS]" if ok else "[FAILED]"
-                print(f"{tag} {label}: {note}")
+                tag = "✅ THÀNH CÔNG" if ok else "❌ THẤT BẠI"
+                line = f"{tag} — {label}: {note}"
+                print(line)
+                lines.append(line)
+            ok_count = sum(1 for _, ok, _ in results if ok)
+            summary = f"📋 Kết quả đăng ký TQTT ({ok_count}/{len(results)} thành công):\n\n" + "\n".join(lines)
+            notify(summary)
             break
 
         print("[WAIT] Chưa mở đăng ký (is_open=false)")

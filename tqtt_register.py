@@ -26,7 +26,7 @@ import random
 import sys
 import time
 
-from tqtt_client import PRIORITY_GROUPS, TqttClient, find_province, find_ward, load_env_file
+from tqtt_client import PRIORITY_GROUPS, TqttClient, find_province, find_ward, load_env_file, send_telegram_message
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -163,6 +163,19 @@ def main():
         print("[DRY-RUN] Dừng ở đây, không gọi POST /concert/submit thật. Thêm --confirm-real-submit để submit thật.")
         return
 
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+
+    def notify(text: str):
+        print(text)
+        if not (token and chat_id):
+            print("[WARN] TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID chưa cấu hình, chỉ in console.")
+            return
+        try:
+            send_telegram_message(token, chat_id, text)
+        except Exception as e:
+            print(f"[WARN] Gửi Telegram thất bại (không ảnh hưởng kết quả đăng ký): {e}")
+
     client = TqttClient()
 
     while True:
@@ -171,12 +184,13 @@ def main():
             if resp.ok:
                 body = resp.json() if resp.content else {}
                 if body.get("result"):
-                    print("[SUCCESS] Đăng ký thành công:", body)
+                    notify(f"✅ Đăng ký TQTT thành công cho {payload['name']}!\n{describe_payload(payload, province, ward)}")
                 else:
-                    print("[WARN] Server trả 200 nhưng result không truthy:", body)
+                    notify(f"⚠️ Server trả 200 nhưng result không truthy cho {payload['name']}: {body}")
             else:
                 # Mirror the frontend's own retry policy: never retry 409/429.
-                print(f"[FAILED] HTTP {resp.status_code}: {resp.text}")
+                note = f"HTTP {resp.status_code}: {resp.text}"
+                notify(f"❌ Đăng ký TQTT THẤT BẠI cho {payload['name']}: {note}")
                 if resp.status_code in (409, 429):
                     print("[STOP] 409/429 — không retry (hết chỗ hoặc bị rate-limit), dừng theo đúng policy của frontend.")
             break

@@ -17,7 +17,17 @@ data/registrants.example.json  # Template (data giả) — có commit, để bi�
 Khác với Xeca (mua vé xe, có giữ ghế + thanh toán VNPay), đây là **form đăng ký miễn phí, không
 giữ chỗ/thanh toán** — xem `docs/tqtt_booking_mechanism.md`. Vì vậy không cần bot Telegram 2 chiều
 hay state máy phức tạp: chỉ cần 1 lần poll-rồi-submit, xong là xong (không có trạng thái
-`pending_payment` như Xeca).
+`pending_payment` như Xeca) — kết quả biết ngay từ response của `/concert/submit`, không có
+API "check trạng thái" riêng để hỏi lại sau.
+
+### Biết kết quả qua Telegram (tự động, không cần SSH check log)
+Cả `tqtt_register.py` và `tqtt_register_batch.py` tự gửi Telegram ngay khi có kết quả:
+- Vừa mở đăng ký: "🎉 tqtt.vn đã mở đăng ký — đang gửi N yêu cầu song song ngay..."
+- Ngay sau khi submit xong: từng người ✅ THÀNH CÔNG / ❌ THẤT BẠI kèm lý do (vd `HTTP 409`
+  nếu hết chỗ), gộp trong 1 tin nhắn tổng kết "x/N thành công".
+
+Lỗi gửi Telegram (nếu có) không làm ảnh hưởng tới kết quả đăng ký thật — script vẫn in kết quả
+ra console/journalctl như bình thường.
 
 ## ⚠️ Dữ liệu cá nhân — không commit
 
