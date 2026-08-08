@@ -17,3 +17,6 @@ state.json.tmp
 
 # TQTT registrants chứa CCCD/SĐT/email THẬT — không commit, xem data/tqtt_registrants.example.json
 data/registrants.json
+
+# TQTT field-key mapping cache (runtime, re-derived from the live frontend bundle each run)
+data/tqtt_field_keys_cache.json

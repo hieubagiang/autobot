@@ -7,12 +7,30 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 import requests
 
 BASE_URL = "https://api.tqtt.vn/api"
 ORIGIN = "https://tqtt.vn"
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+FIELD_KEYS_CACHE_FILE = os.path.join(DATA_DIR, "tqtt_field_keys_cache.json")
+
+# The submit form field names are NOT stable — tqtt.vn prefixes every logical field with a
+# hashed pair like "a26082_k9f3m_" that changes across frontend deploys (observed firsthand
+# on 2026-08-08: registration opened with a new prefix mid-deploy, our hardcoded plain field
+# names ("name", "email", ...) got HTTP 400 code=900 "Invalid Data" for all 4 people, and by
+# the time it was caught manually the event had already hit its participant cap). These
+# helpers re-derive the real field keys from the live frontend bundle before every submit
+# instead of hardcoding them, and flag it via `notify` whenever the mapping actually changes.
+FIELD_SUFFIXES = (
+    "name", "email", "identifier", "phone", "date_of_birth",
+    "living_area", "ward", "priority_group", "agree_receive_info",
+)
+# Anchor suffix used to locate the current prefix — picked because "agree_receive_info" is
+# unlikely to collide with an unrelated identifier elsewhere in a ~1MB minified bundle,
+# unlike e.g. "name" or "ward".
+_PREFIX_ANCHOR_SUFFIX = "agree_receive_info"
 
 COMMON_HEADERS = {
     "accept": "application/json, text/plain, */*",
@@ -90,6 +108,103 @@ def find_ward(name_or_value: str, province_code: str) -> dict | None:
         if _matches(needle, w, ("name_vi", "name_en")):
             return w
     return None
+
+
+def _fetch_bundle_url(sess: requests.Session) -> str:
+    resp = sess.get(ORIGIN + "/", timeout=20)
+    resp.raise_for_status()
+    m = re.search(r'src="(/assets/index-[^"]+\.js)"', resp.text)
+    if not m:
+        raise RuntimeError("Không tìm thấy bundle JS trong trang tqtt.vn — cấu trúc trang có thể đã đổi hoàn toàn.")
+    return m.group(1)
+
+
+def _fetch_bundle_text(sess: requests.Session, bundle_url: str) -> str:
+    resp = sess.get(ORIGIN + bundle_url, timeout=30)
+    resp.raise_for_status()
+    return resp.text
+
+
+def discover_field_keys(bundle_text: str) -> dict:
+    """Extracts the current {suffix: actual_wire_key} mapping straight from the frontend
+    bundle's source text, e.g. {"name": "a26082_k9f3m_name", ...}. Anchors on
+    `_PREFIX_ANCHOR_SUFFIX` to find the current hashed prefix, then verifies every other
+    field's exact `prefix_suffix` string literal is also present — so a partial/garbled
+    match (deeper schema change, not just a renamed prefix) fails loudly instead of
+    silently producing a mapping that will still 400 at submit time."""
+    m = re.search(r'"([A-Za-z0-9]+_[A-Za-z0-9]+)_' + re.escape(_PREFIX_ANCHOR_SUFFIX) + r'"', bundle_text)
+    if not m:
+        raise RuntimeError(
+            f"Không tìm thấy field neo '...{_PREFIX_ANCHOR_SUFFIX}' trong bundle JS — "
+            "cấu trúc form có thể đã đổi hoàn toàn, cần kiểm tra thủ công."
+        )
+    prefix = m.group(1)
+
+    field_keys = {}
+    missing = []
+    for suffix in FIELD_SUFFIXES:
+        full_key = f"{prefix}_{suffix}"
+        if f'"{full_key}"' in bundle_text:
+            field_keys[suffix] = full_key
+        else:
+            missing.append(suffix)
+    if missing:
+        raise RuntimeError(
+            f"Tìm được prefix '{prefix}' nhưng thiếu field: {', '.join(missing)} — "
+            "cấu trúc form có thể đã đổi, cần kiểm tra thủ công."
+        )
+    return field_keys
+
+
+def load_field_keys_cache(path: str = FIELD_KEYS_CACHE_FILE) -> dict | None:
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_field_keys_cache(bundle_url: str, field_keys: dict, path: str = FIELD_KEYS_CACHE_FILE):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"bundle_url": bundle_url, "field_keys": field_keys}, f, ensure_ascii=False, indent=2)
+
+
+def refresh_field_keys(cache_path: str = FIELD_KEYS_CACHE_FILE, notify=None) -> dict:
+    """Cheap on every call when nothing changed: fetches only the tqtt.vn homepage
+    (small) to read the current bundle URL, and only re-downloads+re-parses the ~1MB JS
+    bundle when that URL differs from the cached one (i.e. a real frontend deploy
+    happened) or there's no cache yet. Returns the {suffix: wire_key} mapping to use for
+    `remap_payload()`. Calls `notify(text)` — if given — the moment the mapping actually
+    changes from a previously-cached one, so a form-schema change (see module docstring
+    note above) gets flagged instead of silently causing every submit to 400."""
+    sess = requests.Session()
+    sess.headers["user-agent"] = COMMON_HEADERS["user-agent"]
+
+    bundle_url = _fetch_bundle_url(sess)
+    cache = load_field_keys_cache(cache_path)
+
+    if cache and cache.get("bundle_url") == bundle_url:
+        return cache["field_keys"]
+
+    bundle_text = _fetch_bundle_text(sess, bundle_url)
+    field_keys = discover_field_keys(bundle_text)
+
+    if cache and cache.get("field_keys") != field_keys and notify:
+        notify(
+            "⚠️ tqtt.vn vừa đổi cấu trúc field trong form đăng ký "
+            f"(bundle JS mới: {bundle_url}).\n"
+            f"Mapping cũ: {cache['field_keys']}\n"
+            f"Mapping mới: {field_keys}\n"
+            "Đã tự động cập nhật để dùng mapping mới — không cần làm gì thêm."
+        )
+
+    save_field_keys_cache(bundle_url, field_keys, cache_path)
+    return field_keys
+
+
+def remap_payload(payload: dict, field_keys: dict) -> dict:
+    """Translates a friendly-key payload (name/email/identifier/...) into the actual wire
+    JSON body the server currently expects, using the mapping from `refresh_field_keys()`."""
+    return {field_keys[suffix]: payload[suffix] for suffix in FIELD_SUFFIXES}
 
 
 class TqttClient:

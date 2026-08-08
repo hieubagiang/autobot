@@ -27,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import os
 
-from tqtt_client import TqttClient, load_env_file, send_telegram_message
+from tqtt_client import TqttClient, load_env_file, refresh_field_keys, remap_payload, send_telegram_message
 from tqtt_register import build_payload_from_raw, describe_payload
 
 for _stream in (sys.stdout, sys.stderr):
@@ -202,11 +202,22 @@ def main():
     print(f"[INFO] Đã pre-warm {len(clients)} kết nối tới api.tqtt.vn.")
     poll_client = clients[0]
 
+    field_keys = None
     while True:
+        try:
+            field_keys = refresh_field_keys(notify=notify)
+        except Exception as e:
+            print(f"[WARN] Không refresh được field key mapping ({e}); dùng mapping cũ nếu có.")
+            if field_keys is None:
+                print("[WAIT] Chưa có field key mapping nào, chưa thể submit an toàn, thử lại sau.")
+                time.sleep(args.interval + random.randint(0, max(args.jitter, 0)))
+                continue
+
         capacity = poll_client.get_capacity()
         if capacity.get("is_open"):
             notify(f"🎉 tqtt.vn đã mở đăng ký — đang gửi {len(resolved)} yêu cầu song song ngay...")
-            results = submit_all(resolved, clients, has_priority=bool(args.priority_name))
+            wire_resolved = [{**e, "payload": remap_payload(e["payload"], field_keys)} for e in resolved]
+            results = submit_all(wire_resolved, clients, has_priority=bool(args.priority_name))
 
             lines = []
             for label, ok, note in results:

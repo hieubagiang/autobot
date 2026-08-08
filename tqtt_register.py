@@ -26,7 +26,16 @@ import random
 import sys
 import time
 
-from tqtt_client import PRIORITY_GROUPS, TqttClient, find_province, find_ward, load_env_file, send_telegram_message
+from tqtt_client import (
+    PRIORITY_GROUPS,
+    TqttClient,
+    find_province,
+    find_ward,
+    load_env_file,
+    refresh_field_keys,
+    remap_payload,
+    send_telegram_message,
+)
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -178,9 +187,19 @@ def main():
 
     client = TqttClient()
 
+    field_keys = None
     while True:
         try:
-            resp = try_submit(client, payload)
+            field_keys = refresh_field_keys(notify=notify)
+        except Exception as e:
+            print(f"[WARN] Không refresh được field key mapping ({e}); dùng mapping cũ nếu có.")
+            if field_keys is None:
+                print("[WAIT] Chưa có field key mapping nào, chưa thể submit an toàn, thử lại sau.")
+                time.sleep(args.interval + random.randint(0, max(args.jitter, 0)))
+                continue
+
+        try:
+            resp = try_submit(client, remap_payload(payload, field_keys))
             if resp.ok:
                 body = resp.json() if resp.content else {}
                 if body.get("result"):

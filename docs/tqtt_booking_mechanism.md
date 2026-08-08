@@ -87,6 +87,46 @@ frontend just checks `Bt.get(q, "data.result", null)` and treats any truthy valu
 success). On failure, the frontend reads a localized error at
 `response.data.error.message_<lang>` (e.g. `message_vi`, `message_en`).
 
+## Field names are obfuscated and change across deploys (incident 2026-08-08)
+The JSON keys shown above (`name`, `email`, `identifier`, ...) are the **logical** field
+names used throughout this codebase — they are **not** what actually goes over the wire.
+The live frontend bundle prefixes every one of the 9 submit fields with a hashed pair,
+e.g. `a26082_k9f3m_name`, `a26082_k9f3m_email`, ... (all 9 share the same prefix). This
+prefix is a **build-time constant** baked as a literal string into the JS bundle — it is
+not per-session/per-request random, but it does change whenever tqtt.vn redeploys their
+frontend (the bundle filename's content hash, e.g. `index-ChjMCMB4.js`, changes too).
+
+On 2026-08-08, registration opened with a **new prefix** deployed at the same moment as
+the open — `tqtt_register_batch.py` was still hardcoding the old plain field names
+(`"name"`, `"email"`, ...) and every one of the 4 real submissions got rejected instantly:
+```
+HTTP 400 {"error":{"code":900,"message_en":"Invalid Data","message_vi":"Dữ liệu không hợp lệ"}}
+```
+By the time this was noticed and a corrected payload was tried manually, the event had
+already hit its participant cap:
+```
+HTTP 400 {"error":{"code":1179,"message_en":"Participant limit reached. Cannot accept more submissions."}}
+```
+i.e. the bot lost the race entirely because of a field-name mismatch, not speed.
+
+**Fix — dynamic field-key discovery** (`tqtt_client.py`):
+- `refresh_field_keys()` fetches the tqtt.vn homepage (cheap, small) to read the current
+  bundle URL (`<script type="module" src="/assets/index-HASH.js">`), and only
+  re-downloads+re-parses the ~1MB bundle when that URL differs from the cached one
+  (`data/tqtt_field_keys_cache.json`, gitignored — runtime cache, not source) — so normal
+  polling stays cheap.
+- `discover_field_keys()` anchors on the `agree_receive_info` suffix (least likely to
+  collide with unrelated minified identifiers) to find the current prefix, then verifies
+  all 9 `prefix_suffix` string literals are present — raises loudly if the schema changed
+  more deeply than just the prefix, instead of silently building a broken mapping.
+- `remap_payload()` translates the logical-key payload into the real wire JSON body right
+  before every submit (both `tqtt_register.py` and `tqtt_register_batch.py` re-resolve
+  this on every poll cycle, not once at startup — so a mid-wait redeploy is caught before
+  the critical submit moment).
+- If the mapping actually changes from a previously cached one, a Telegram notification
+  fires automatically (see `notify=` param) — this is the guard against the exact failure
+  above recurring silently.
+
 ## Practical bot strategy
 1. Poll `GET /concert/capacity` on an interval (Phase 1, `tqtt_watch.py`) until
    `is_open: true`, then notify via Telegram (registration opening is a rare, ~one-time
