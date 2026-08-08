@@ -5,9 +5,12 @@ Reverse-engineered endpoints are documented in docs/tqtt_booking_mechanism.md.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
+import random
 import re
+import time
 
 import requests
 
@@ -205,6 +208,47 @@ def remap_payload(payload: dict, field_keys: dict) -> dict:
     """Translates a friendly-key payload (name/email/identifier/...) into the actual wire
     JSON body the server currently expects, using the mapping from `refresh_field_keys()`."""
     return {field_keys[suffix]: payload[suffix] for suffix in FIELD_SUFFIXES}
+
+
+TIGHT_POLL_SECONDS = 0.4  # poll cadence inside the tight window around a known --target-time
+TIGHT_WINDOW_BEFORE_SECONDS = 60  # start hammering this long before target
+TIGHT_WINDOW_AFTER_SECONDS = 120  # give up hammering this long after target if still not
+# open (the announced time might be off) and fall back to the normal --interval cadence,
+# rather than polling at TIGHT_POLL_SECONDS forever.
+
+
+def parse_target_time(value: str) -> float:
+    """Parses 'HH:MM' or 'HH:MM:SS' (server-local time — the deployment box runs
+    Asia/Ho_Chi_Minh, matching VN wall-clock time directly) as the next occurrence of that
+    time from now, returned as a Unix timestamp. Used when the opening time is announced
+    in advance, so polling can switch to a much tighter cadence right around it instead of
+    relying on the same interval the whole time — see next_poll_interval()."""
+    parts = [int(p) for p in value.split(":")]
+    while len(parts) < 3:
+        parts.append(0)
+    now = datetime.datetime.now()
+    target = now.replace(hour=parts[0], minute=parts[1], second=parts[2], microsecond=0)
+    if target <= now:
+        target += datetime.timedelta(days=1)
+    return target.timestamp()
+
+
+def is_in_tight_window(target_ts: float | None) -> bool:
+    if target_ts is None:
+        return False
+    now = time.time()
+    return target_ts - TIGHT_WINDOW_BEFORE_SECONDS <= now <= target_ts + TIGHT_WINDOW_AFTER_SECONDS
+
+
+def next_poll_interval(interval: int, jitter: int, target_ts: float | None) -> float:
+    """Normal cadence (`interval` + random jitter) far from `target_ts`; switches to
+    near-continuous polling (`TIGHT_POLL_SECONDS`, no jitter — every fraction of a second
+    counts here) inside the window around it. Matters when the whole event's capacity can
+    fill within the first minute of opening — the up-to-`interval+jitter` lag of constant
+    polling becomes the bottleneck, not request speed itself."""
+    if is_in_tight_window(target_ts):
+        return TIGHT_POLL_SECONDS
+    return interval + random.randint(0, max(jitter, 0))
 
 
 class TqttClient:

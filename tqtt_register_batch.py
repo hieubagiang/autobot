@@ -20,14 +20,22 @@ from __future__ import annotations
 
 import argparse
 import json
-import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import os
 
-from tqtt_client import TqttClient, load_env_file, refresh_field_keys, remap_payload, send_telegram_message
+from tqtt_client import (
+    TqttClient,
+    is_in_tight_window,
+    load_env_file,
+    next_poll_interval,
+    parse_target_time,
+    refresh_field_keys,
+    remap_payload,
+    send_telegram_message,
+)
 from tqtt_register import build_payload_from_raw, describe_payload
 
 for _stream in (sys.stdout, sys.stderr):
@@ -148,6 +156,10 @@ def main():
                          help="Tên (khớp gần đúng, không phân biệt hoa/thường) được gọi API TRƯỚC những người còn lại")
     parser.add_argument("--interval", type=int, default=5, help="Chu kỳ poll (giây) khi chưa mở, mặc định 5s")
     parser.add_argument("--jitter", type=int, default=2)
+    parser.add_argument("--target-time", default=None,
+                         help="Giờ dự kiến mở đăng ký, định dạng HH:MM hoặc HH:MM:SS (giờ máy chủ). "
+                              "Quanh giờ này script tự chuyển sang poll dồn dập (0.4s/lần) "
+                              "thay vì chờ --interval như bình thường.")
     parser.add_argument("--dry-run", action="store_true", default=True, help="(mặc định) chỉ resolve+in payload, KHÔNG submit")
     parser.add_argument("--confirm-real-submit", action="store_true", help="Bắt buộc để thực sự submit form thật cho tất cả")
     parser.add_argument("--once", action="store_true", help="Chỉ thử 1 lần rồi thoát (kể cả khi chưa mở)")
@@ -155,6 +167,10 @@ def main():
     args = parser.parse_args()
     if args.confirm_real_submit:
         args.dry_run = False
+
+    target_ts = parse_target_time(args.target_time) if args.target_time else None
+    if target_ts:
+        print(f"[INFO] Target time: {args.target_time} — sẽ tự poll dồn dập (0.4s/lần) quanh giờ này.")
 
     load_env_file(args.env_file)
 
@@ -203,14 +219,24 @@ def main():
     poll_client = clients[0]
 
     field_keys = None
+    was_tight = False
     while True:
+        tight_now = is_in_tight_window(target_ts)
+        if tight_now and not was_tight:
+            print("[INFO] Đã vào khung giờ gần target-time — chuyển sang poll dồn dập (0.4s/lần).")
+        elif was_tight and not tight_now:
+            print("[INFO] Đã ra khỏi khung giờ target-time mà vẫn chưa mở — quay lại poll bình thường.")
+        was_tight = tight_now
+
         try:
             field_keys = refresh_field_keys(notify=notify)
         except Exception as e:
             print(f"[WARN] Không refresh được field key mapping ({e}); dùng mapping cũ nếu có.")
             if field_keys is None:
                 print("[WAIT] Chưa có field key mapping nào, chưa thể submit an toàn, thử lại sau.")
-                time.sleep(args.interval + random.randint(0, max(args.jitter, 0)))
+                if args.once:
+                    break
+                time.sleep(next_poll_interval(args.interval, args.jitter, target_ts))
                 continue
 
         capacity = poll_client.get_capacity()
@@ -235,9 +261,11 @@ def main():
             break
         # Keep everyone else's connection warm too while waiting (poll_client's is already
         # fresh from the capacity check above) — cheap: len(clients)-1 extra GETs per cycle.
-        warm_up_clients(clients, skip=poll_client)
-        sleep_for = args.interval + random.randint(0, max(args.jitter, 0))
-        time.sleep(sleep_for)
+        # Skip re-warming during the tight window — pointless overhead when we're about to
+        # loop back around in 0.4s anyway.
+        if not tight_now:
+            warm_up_clients(clients, skip=poll_client)
+        time.sleep(next_poll_interval(args.interval, args.jitter, target_ts))
 
 
 if __name__ == "__main__":

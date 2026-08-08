@@ -132,6 +132,29 @@ vào thread scheduling. `--priority-name "<tên>"` (khớp gần đúng, không 
 = 0.05s trong `tqtt_register_batch.py`) trước khi bắn phần còn lại — đảm bảo request của họ
 thực sự rời máy trước, không chỉ "may rủi" theo lịch trình thread.
 
+### Field key tự động cập nhật (chống đổi tên field âm thầm)
+Cả hai script giờ tự lấy tên field thật (`a26082_k9f3m_name`, ...) từ bundle JS sống của
+tqtt.vn ngay trước mỗi lần submit, thay vì hardcode `"name"`/`"email"`/... — xem phần "Field
+name obfuscation" trong `docs/tqtt_booking_mechanism.md` để biết đầy đủ sự cố 2026-08-08 đã
+dẫn tới việc này. Nếu mapping đổi so với lần cache trước, Telegram tự báo ngay — không cần
+làm gì thêm, nhưng nếu bundle thay đổi *cấu trúc* sâu hơn (field bị đổi tên suffix, không chỉ
+đổi prefix, hoặc form bị gỡ khỏi bundle hoàn toàn — ví dụ sau khi sự kiện đã đóng), script sẽ
+in `[WARN]`/`[WAIT]` rõ ràng và **không** submit mù — cần kiểm tra thủ công lúc đó.
+
+### Poll dồn dập quanh giờ mở đã biết trước (`--target-time`)
+Nếu biết chắc giờ mở (vd thông báo trước "10h00 mở đăng ký"), thêm
+`--target-time 10:00` (giờ máy chủ, đang là `Asia/Ho_Chi_Minh` — trùng giờ VN) vào
+`ExecStart`. Script vẫn poll bình thường (`--interval`/`--jitter`, mặc định 5-7s) khi còn xa
+giờ đó, nhưng tự chuyển sang poll **mỗi 0.4s** trong khung từ 60s trước tới 120s sau giờ
+target — giảm độ trễ phát hiện `is_open` (và phát hiện field key đổi) từ tối đa 5-7s xuống
+dưới 1s, quan trọng khi suất đăng ký hết trong vòng chưa tới 1 phút đầu:
+```
+ExecStart=/opt/autobot/venv/bin/python tqtt_register_batch.py --confirm-real-submit \
+  --priority-name "PHẠM THỊ THỤC CHINH" --target-time 10:00
+```
+Nếu qua khung (target + 120s) mà vẫn chưa mở, tự quay lại poll bình thường (phòng trường hợp
+giờ công bố bị lệch) — không cần restart service thủ công.
+
 ```bash
 ssh root@hieuit.top "systemctl daemon-reload && systemctl enable --now tqtt-watch tqtt-register"
 ```
