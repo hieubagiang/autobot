@@ -145,6 +145,20 @@ Khác với `/book`+`/confirm` (đặt 1 lần, cần xác nhận thủ công), 
 5. Trạng thái `instant: true/false` lưu trong `state.json` — nếu `xeca-bot.service` restart,
    bot tự resume lại các mục đang bật instant (trừ khi đã `/paid`).
 
+### 2 mode trong instant-book
+- **"Lên lịch" (scheduled)** — có `target_time` (đặt qua `/instant <id> on <HH:MM>` hoặc
+  nút ⏱ trong `/list`): còn xa giờ đó thì **không poll gì cả** (0 API call), ngủ 1 mạch
+  tới gần giờ rồi mới tự chuyển sang thử liên tục (0.4s/lần) quanh giờ target.
+- **"Treo mua" (camp)** — không có `target_time`, hoặc sale đã mở nhưng chưa có ghế hợp ý
+  (`NoSeatsAvailableError`): luôn chủ động thử liên tục (15s/lần), không có giờ nào để
+  chờ nên không deferred.
+
+**TODO (chưa làm — biết trước, set nhiều ngày trước sẽ sai):** `target_time` hiện chỉ nhận
+`HH:MM`/`HH:MM:SS`, luôn hiểu là "lần kế tiếp đồng hồ chỉ giờ này" — an toàn nếu set trong
+vòng 24h trước giờ thật, nhưng nếu set trước 2-3 ngày sẽ bị hiểu nhầm thành hôm nay/ngày mai.
+Cần thêm ngày tuỳ chọn, ví dụ `/instant <id> on 08:00 13/08/2026`, để `parse_target_time()`
+tính chính xác thời điểm thay vì suy ra "lần kế tiếp từ giờ hiện tại".
+
 Lưu ý: mỗi chu kỳ chỉ tạo 1 đơn chưa thanh toán (không tốn tiền cho tới khi bạn tự thanh
 toán), nhưng vẫn là hành động thật trên hệ thống Văn Minh (chiếm ghế tạm thời, tạo bản ghi
 đơn hàng) — tắt instant khi không cần nữa để tránh giữ ghế không cần thiết.
