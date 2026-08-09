@@ -58,6 +58,16 @@ class NoSeatsAvailableError(RuntimeError):
     freed seat before someone else does."""
 
 
+class BookingResponseShapeError(RuntimeError):
+    """create_order()/initiate_payment() returned 200 OK but without the field we expect
+    (order_id / redirect_url) — Xeca's backend response shape has drifted from what this
+    code was reverse-engineered against. Same root cause class as the TQTT field-name
+    incident (2026-08-08): a stale request/response-shape assumption silently produces
+    garbage instead of failing loudly. Not a "not open yet" condition — retrying blindly
+    won't fix a schema mismatch, so callers should surface this loudly instead of quietly
+    treating it like any other retryable RuntimeError."""
+
+
 def resolve_points(client: XecaClient, bus_time: dict, depart_date: int, direction: dict,
                     pickup_override: str | None, dropoff_override: str | None) -> tuple[dict, dict, str, str]:
     bus_time_id = bus_time["id"]
@@ -293,6 +303,11 @@ def execute_booking(client: XecaClient, plan: dict, direction: dict, depart_date
     )
     print("[ORDER] ", order)
     order_id = order.get("id") or order.get("orderId")
+    if not order_id:
+        raise BookingResponseShapeError(
+            f"Đơn đã tạo (HTTP 200) nhưng không tìm thấy order_id trong response — "
+            f"cấu trúc API create_order có thể đã đổi: {order}"
+        )
 
     payment = client.initiate_payment(order_id)
     print("[PAYMENT] ", payment)
@@ -300,6 +315,11 @@ def execute_booking(client: XecaClient, plan: dict, direction: dict, depart_date
         payment.get("redirect_url") or payment.get("paymentUrl")
         or payment.get("payUrl") or payment.get("url")
     )
+    if not payment_url:
+        raise BookingResponseShapeError(
+            f"Order {order_id} đã tạo nhưng không tìm thấy link thanh toán trong response — "
+            f"cấu trúc API initiate_payment có thể đã đổi: {payment}"
+        )
 
     text = (
         f"{message_prefix}\n\n{describe_plan(plan, direction)}\n\n"
@@ -402,6 +422,15 @@ def main():
                     update_item(item["id"], path=args.state_file, status="pending_payment",
                                 order_id=result["order_id"], booking=result["booking"])
             break
+        except BookingResponseShapeError as e:
+            # Not a "try again later" condition like SaleNotOpenError/NoSeatsAvailableError —
+            # a schema mismatch won't fix itself on retry. Surface it loudly and exit non-zero
+            # so run_booking()/the Telegram bot reports "❌ Có lỗi" instead of silently looking
+            # like success (exactly the TQTT-incident failure mode this class exists to avoid).
+            print(f"[ERROR] {e}")
+            if token and chat_id:
+                send_telegram_message(token, chat_id, f"🚨 Đặt vé thất bại — cấu trúc API Xeca có thể đã đổi:\n{e}")
+            sys.exit(1)
         except RuntimeError as e:
             print(f"[WAIT] {e}")
             if args.once:
