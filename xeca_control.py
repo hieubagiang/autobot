@@ -13,6 +13,7 @@ import sys
 import time
 
 from xeca_client import (
+    TIGHT_WINDOW_BEFORE_SECONDS,
     XecaClient,
     get_direction,
     is_in_tight_window,
@@ -182,6 +183,7 @@ def instant_lock_loop(item_id: str, stop_event, notify,
     last_camp_notify = 0.0
     last_not_open_notify = 0.0
     was_tight = False
+    was_scheduled_wait = False
     target_time_str = None
     target_ts = None
     while not stop_event.is_set():
@@ -221,6 +223,31 @@ def instant_lock_loop(item_id: str, stop_event, notify,
             and existing_expiry_ms
             and existing_expiry_ms / 1000 - time.time() > INSTANT_EXPIRY_BUFFER_SECONDS
         )
+
+        # Two distinct modes live inside this one loop:
+        #  1. "scheduled" — a target_time is set and we're still well before it: don't call
+        #     plan_booking()/hit the API at all, just sleep through to near that time. Camping
+        #     hours before a known-not-open date accomplishes nothing but load + notify spam.
+        #  2. "camp" (treo mua, hễ trống là mua) — sale is open but no seat matches yet
+        #     (NoSeatsAvailableError below), or no target_time was given at all: always
+        #     actively retrying, no deferral, since there's no known future instant to wait for.
+        scheduled_wait = (
+            not resuming_valid_hold
+            and target_ts is not None
+            and not tight_now
+            and time.time() < target_ts - TIGHT_WINDOW_BEFORE_SECONDS
+        )
+        if scheduled_wait and not was_scheduled_wait:
+            _safe_notify(
+                f"🗓️ [instant {item_id}] Đã lên lịch quanh giờ {target_time_str} — tạm KHÔNG poll cho tới "
+                f"gần giờ đó, sẽ tự động chuyển sang thử liên tục khi tới."
+            )
+        was_scheduled_wait = scheduled_wait
+        if scheduled_wait:
+            defer_seconds = max(1.0, (target_ts - TIGHT_WINDOW_BEFORE_SECONDS) - time.time())
+            if stop_event.wait(defer_seconds):
+                return
+            continue
 
         if resuming_valid_hold:
             seat_names = ", ".join(existing_booking.get("seat_names") or [])
