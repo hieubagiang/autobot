@@ -15,7 +15,8 @@ under each /list item — buttons call the same handlers as the text commands):
   /status                                                  - service + live sale-open check
   /book <id>                                               - preview plan, ask to /confirm
   /confirm <code>                                          - confirm the pending /book (real money!)
-  /instant <id> on|off                                     - keep re-locking a seat until stopped
+  /instant <id> on|off [HH:MM]                             - keep re-locking a seat until stopped
+                                                              (optional HH:MM tightens polling near a known open time)
   /passenger                                               - show the passenger name/phone used for real bookings
   /setpassenger <phone> <tên...>                            - change passenger name/phone
   /start /stop /restart                                    - control xeca-watch.service
@@ -312,7 +313,8 @@ class Bot:
             "/status — trạng thái service + kiểm tra mở bán trực tiếp\n"
             "/book <id> — xem trước kế hoạch, cần /confirm để đặt thật\n"
             "/confirm <mã> — xác nhận đặt vé thật (có hiệu lực 2 phút)\n"
-            "/instant <id> on|off — tự động giữ ghế liên tục (chưa thanh toán, tự giữ lại khi hết hạn)\n"
+            "/instant <id> on|off [HH:MM] — tự động giữ ghế liên tục (chưa thanh toán, tự giữ lại khi hết hạn)\n"
+            "  Thêm HH:MM (giờ dự kiến mở bán) để tự poll dồn dập quanh giờ đó, vd /instant <id> on 08:00\n"
             "/paid <id> — đánh dấu đã thanh toán xong (dừng auto-relock nếu đang instant)\n"
             "/passenger — xem tên/SĐT hành khách hiện tại\n"
             "/setpassenger <sđt> <tên> — đổi tên/SĐT hành khách dùng khi đặt vé thật\n"
@@ -490,12 +492,22 @@ class Bot:
 
     def cmd_instant(self, rest: str) -> str:
         parts = rest.split()
-        if len(parts) != 2 or parts[1].lower() not in ("on", "off"):
-            return "Cú pháp: /instant <id> on|off"
+        if len(parts) not in (2, 3) or parts[1].lower() not in ("on", "off"):
+            return "Cú pháp: /instant <id> on|off [HH:MM]"
         item_id, action = parts[0], parts[1].lower()
-        return self.set_instant(item_id, action == "on")
+        target_time = None
+        if len(parts) == 3:
+            if action != "on":
+                return "Chỉ dùng [HH:MM] khi bật (on), vd: /instant <id> on 08:00"
+            try:
+                fmt = "%H:%M:%S" if parts[2].count(":") == 2 else "%H:%M"
+                datetime.strptime(parts[2], fmt)
+            except ValueError:
+                return "Giờ không hợp lệ, dùng định dạng HH:MM hoặc HH:MM:SS (0-23h/0-59p), vd: /instant <id> on 08:00"
+            target_time = parts[2]
+        return self.set_instant(item_id, action == "on", target_time=target_time)
 
-    def set_instant(self, item_id: str, enable: bool) -> str:
+    def set_instant(self, item_id: str, enable: bool, target_time: str | None = None) -> str:
         item = get_item(item_id, self.state_file)
         if not item:
             return f"Không tìm thấy id={item_id}"
@@ -506,8 +518,12 @@ class Bot:
             cust_name, cust_mobile = get_passenger_info(self.state_file)
             if not cust_name or not cust_mobile:
                 return "Chưa có thông tin hành khách — dùng /setpassenger <sđt> <tên> trước khi bật instant."
-            update_item(item_id, path=self.state_file, instant=True)
-            return self.start_instant(item_id)
+            fields = {"instant": True}
+            if target_time:
+                fields["target_time"] = target_time
+            update_item(item_id, path=self.state_file, **fields)
+            extra = f" Sẽ tự poll dồn dập quanh giờ {target_time}." if target_time else ""
+            return self.start_instant(item_id) + extra
         else:
             update_item(item_id, path=self.state_file, instant=False)
             entry = self.instant_threads.pop(item_id, None)

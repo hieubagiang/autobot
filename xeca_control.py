@@ -12,7 +12,15 @@ import subprocess
 import sys
 import time
 
-from xeca_client import XecaClient, get_direction, is_sale_open, select_preferred_bus_time
+from xeca_client import (
+    XecaClient,
+    get_direction,
+    is_in_tight_window,
+    is_sale_open,
+    next_poll_interval,
+    parse_target_time,
+    select_preferred_bus_time,
+)
 from xeca_state import DEFAULT_STATE_FILE, add_item, get_item, list_items, remove_item, update_item
 
 WATCH_SERVICE = "xeca-watch.service"
@@ -136,7 +144,11 @@ def instant_lock_loop(item_id: str, stop_event, notify,
     Retries fast (INSTANT_RETRY_SOLD_OUT_SECONDS) when sale is open but nothing matches the
     seat preference yet ("camping" a sold-out date for a freed seat — a race against other
     customers/bots, worth polling tightly) and slow (INSTANT_RETRY_NOT_OPEN_SECONDS) when
-    sale isn't open at all (changes ~once/day, no rush).
+    sale isn't open at all (changes ~once/day, no rush) — unless the item has a
+    `target_time` (set via `/instant <id> on <HH:MM>`), in which case the "not open" wait
+    tightens way down (see xeca_client.next_poll_interval) in a window around that time,
+    since a known opening instant is worth polling near-continuously for instead of
+    waiting up to INSTANT_RETRY_NOT_OPEN_SECONDS to notice it flipped.
 
     If called for an item that's already `instant_holding` with an unexpired
     `booking.hold_expiry_ms` (e.g. this loop is being resumed after a bot restart via
@@ -162,11 +174,34 @@ def instant_lock_loop(item_id: str, stop_event, notify,
 
     client = XecaClient()
     last_camp_notify = 0.0
+    was_tight = False
+    target_time_str = None
+    target_ts = None
     while not stop_event.is_set():
         item = get_item(item_id, state_file)
         if not item or not item.get("instant"):
             return
         direction = get_direction(item["direction"])
+
+        # Optional /instant <id> on <HH:MM> — if the user knows the announced opening
+        # time, tighten the SaleNotOpenError retry cadence way down around it (see
+        # xeca_client.next_poll_interval) instead of waiting the full
+        # INSTANT_RETRY_NOT_OPEN_SECONDS each cycle. Only re-parse when the stored
+        # target_time string actually changes (so it can be set/changed live via a fresh
+        # /instant on <HH:MM>) — NOT on every iteration: parse_target_time() resolves to
+        # "the next occurrence from now", so re-parsing the SAME string every loop would
+        # make the target silently jump to tomorrow the instant "now" ticks past it,
+        # collapsing TIGHT_WINDOW_AFTER_SECONDS to ~0 right when it matters most.
+        raw_target_time = item.get("target_time")
+        if raw_target_time != target_time_str:
+            target_time_str = raw_target_time
+            target_ts = parse_target_time(raw_target_time) if raw_target_time else None
+        tight_now = is_in_tight_window(target_ts)
+        if tight_now and not was_tight:
+            _safe_notify(f"⏱️ [instant {item_id}] Vào khung giờ gần target-time ({item['target_time']}) — chuyển sang poll dồn dập.")
+        elif was_tight and not tight_now:
+            _safe_notify(f"[instant {item_id}] Đã ra khỏi khung giờ target-time mà vẫn chưa mở — quay lại nhịp poll bình thường.")
+        was_tight = tight_now
 
         # A hold from before a bot restart (xeca_telegram_bot.resume_instant_items runs this
         # loop fresh on every startup) may still be valid — resuming it instead of always
@@ -197,8 +232,10 @@ def instant_lock_loop(item_id: str, stop_event, notify,
                                      item.get("pickup_name"), item.get("dropoff_name"),
                                      allow_middle_seats=True)
             except SaleNotOpenError as e:
-                _safe_notify(f"⏳ [instant {item_id}] {e} (thử lại sau {INSTANT_RETRY_NOT_OPEN_SECONDS}s)")
-                if stop_event.wait(INSTANT_RETRY_NOT_OPEN_SECONDS):
+                wait_seconds = next_poll_interval(INSTANT_RETRY_NOT_OPEN_SECONDS, 0, target_ts)
+                if not tight_now:
+                    _safe_notify(f"⏳ [instant {item_id}] {e} (thử lại sau {int(wait_seconds)}s)")
+                if stop_event.wait(wait_seconds):
                     return
                 continue
             except NoSeatsAvailableError as e:

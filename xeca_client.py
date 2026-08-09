@@ -3,7 +3,10 @@
 Reverse-engineered endpoints are documented in docs/xeca_booking_mechanism.md.
 """
 
+import datetime
 import os
+import random
+import time
 import uuid
 
 import requests
@@ -12,6 +15,42 @@ BASE_URL = "https://api-pro.xeca.vn/v1"
 ORIGIN = "https://vanminh.xeca.vn"
 DEFAULT_AGENCY_ID = "1"
 DEFAULT_SOURCE_CHANNEL = 11
+
+TIGHT_POLL_SECONDS = 0.4  # poll cadence inside the tight window around a known target time
+TIGHT_WINDOW_BEFORE_SECONDS = 60  # start hammering this long before target
+TIGHT_WINDOW_AFTER_SECONDS = 120  # give up hammering this long after target if still not
+# open (the announced time might be off) and fall back to the normal cadence — same
+# scheme as tqtt_client.py's, duplicated here rather than imported since the Xeca and TQTT
+# modules are kept independently deployable.
+
+
+def parse_target_time(value: str) -> float:
+    """Parses 'HH:MM' or 'HH:MM:SS' (server-local time) as the next occurrence of that
+    time from now, returned as a Unix timestamp. See next_poll_interval()."""
+    parts = [int(p) for p in value.split(":")]
+    while len(parts) < 3:
+        parts.append(0)
+    now = datetime.datetime.now()
+    target = now.replace(hour=parts[0], minute=parts[1], second=parts[2], microsecond=0)
+    if target <= now:
+        target += datetime.timedelta(days=1)
+    return target.timestamp()
+
+
+def is_in_tight_window(target_ts: float | None) -> bool:
+    if target_ts is None:
+        return False
+    now = time.time()
+    return target_ts - TIGHT_WINDOW_BEFORE_SECONDS <= now <= target_ts + TIGHT_WINDOW_AFTER_SECONDS
+
+
+def next_poll_interval(interval: float, jitter: float, target_ts: float | None) -> float:
+    """Normal cadence (`interval` + random jitter) far from `target_ts`; switches to
+    near-continuous polling (`TIGHT_POLL_SECONDS`) inside the window around it — matters
+    when the exact opening instant matters more than steady-state politeness."""
+    if is_in_tight_window(target_ts):
+        return TIGHT_POLL_SECONDS
+    return interval + random.uniform(0, max(jitter, 0))
 
 COMMON_HEADERS = {
     "accept": "*/*",
