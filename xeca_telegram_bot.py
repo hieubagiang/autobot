@@ -60,6 +60,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 CONFIRM_TTL_SECONDS = 120
+SETTIME_TTL_SECONDS = 120
 LONG_POLL_TIMEOUT = 25
 
 BOT_COMMANDS = [
@@ -67,7 +68,8 @@ BOT_COMMANDS = [
     {"command": "list", "description": "Xem watchlist"},
     {"command": "status", "description": "Trạng thái service + kiểm tra mở bán"},
     {"command": "book", "description": "Xem trước kế hoạch đặt vé (cần /confirm)"},
-    {"command": "instant", "description": "Bật/tắt tự động giữ ghế liên tục: <id> on|off"},
+    {"command": "instant", "description": "Bật/tắt tự động giữ ghế liên tục: <id> on|off [HH:MM]"},
+    {"command": "cancel", "description": "Huỷ thao tác đang chờ (đặt giờ / confirm)"},
     {"command": "paid", "description": "Đánh dấu 1 vé đã thanh toán xong: <id>"},
     {"command": "remove", "description": "Xoá 1 vé khỏi watchlist"},
     {"command": "setpickup", "description": "Ghi đè điểm đón"},
@@ -108,6 +110,8 @@ def format_item(item: dict, live: dict | None = None) -> str:
     header = f"[{item['id']}] {direction} - {item['depart_date']} - x{item.get('quantity', 1)} - {status_label}"
     if item.get("instant"):
         header += " ⚡"
+    if item.get("target_time"):
+        header += f" ⏱{item['target_time']}"
 
     booking = item.get("booking")
     if booking:
@@ -141,6 +145,18 @@ def format_item(item: dict, live: dict | None = None) -> str:
     return line
 
 
+def parse_time_input(value: str) -> str | None:
+    """Validates 'HH:MM' or 'HH:MM:SS' (proper 0-23h/0-59m/0-59s range, not just digit
+    shape) and returns it unchanged if valid, None otherwise. Shared by /instant's inline
+    [HH:MM] arg and the button-driven "reply with a time" flow (see cb_settime)."""
+    try:
+        fmt = "%H:%M:%S" if value.count(":") == 2 else "%H:%M"
+        datetime.strptime(value, fmt)
+    except ValueError:
+        return None
+    return value
+
+
 def item_keyboard(item: dict) -> dict:
     item_id = item["id"]
     instant_btn = (
@@ -148,11 +164,15 @@ def item_keyboard(item: dict) -> dict:
         if item.get("instant")
         else {"text": "⚡ Bật instant", "callback_data": f"inston:{item_id}"}
     )
-    rows = [[
-        {"text": "📖 Book", "callback_data": f"book:{item_id}"},
-        instant_btn,
-        {"text": "🗑 Xoá", "callback_data": f"remove:{item_id}"},
-    ]]
+    target_time = item.get("target_time")
+    settime_btn = {
+        "text": f"⏱ Đổi giờ ({target_time})" if target_time else "⏱ Đặt giờ mở bán",
+        "callback_data": f"settime:{item_id}",
+    }
+    rows = [
+        [{"text": "📖 Book", "callback_data": f"book:{item_id}"}, instant_btn, {"text": "🗑 Xoá", "callback_data": f"remove:{item_id}"}],
+        [settime_btn],
+    ]
     if item.get("status") in ("pending_payment", "instant_holding"):
         rows.append([{"text": "✅ Đã thanh toán", "callback_data": f"paid:{item_id}"}])
     return {"inline_keyboard": rows}
@@ -166,6 +186,7 @@ class Bot:
         self.env_file = env_file
         self.api = f"https://api.telegram.org/bot{token}"
         self.pending_confirm = None  # {"item_id", "code", "expires_at"}
+        self.pending_time_request = None  # {"item_id", "expires_at"} — see cb_settime/handle_message
         self.instant_threads = {}  # item_id -> {"stop_event": Event, "thread": Thread}
 
     def send(self, text: str, parse_mode: str | None = None, reply_markup: dict | None = None):
@@ -229,6 +250,30 @@ class Bot:
             if text:
                 print(f"[BOT] Ignoring message from unauthorized chat_id={from_id}")
             return
+
+        # Button-driven "reply with a time" flow (see cb_settime) — a bare non-command
+        # reply while a request is pending is read as the HH:MM answer instead of falling
+        # through to dispatch(), which would otherwise just show the help text for it.
+        # Commands (leading "/") always pass through normally, so /cancel etc. still work.
+        if self.pending_time_request and not text.startswith("/"):
+            if datetime.now() > self.pending_time_request["expires_at"]:
+                self.pending_time_request = None
+            else:
+                item_id = self.pending_time_request["item_id"]
+                target_time = parse_time_input(text)
+                if not target_time:
+                    self.send("Giờ không hợp lệ, dùng định dạng HH:MM hoặc HH:MM:SS (vd 08:00), hoặc /cancel để huỷ.")
+                    return
+                self.pending_time_request = None
+                try:
+                    reply = self.set_instant(item_id, True, target_time=target_time)
+                except Exception as e:
+                    traceback.print_exc()
+                    reply = f"❌ Lỗi: {e}"
+                if reply:
+                    self.send(reply)
+                return
+
         try:
             reply = self.dispatch(text)
         except Exception as e:
@@ -261,6 +306,8 @@ class Bot:
                 reply = self.set_instant(item_id, True)
             elif action == "instoff":
                 reply = self.set_instant(item_id, False)
+            elif action == "settime":
+                reply = self.cb_settime(item_id)
             elif action == "paid":
                 reply = self.cmd_paid(item_id)
             else:
@@ -286,6 +333,7 @@ class Bot:
             "/book": self.cmd_book,
             "/confirm": self.cmd_confirm,
             "/instant": self.cmd_instant,
+            "/cancel": lambda r: self.cmd_cancel(),
             "/paid": lambda r: self.cmd_paid(r.strip()),
             "/passenger": lambda r: self.cmd_passenger(),
             "/setpassenger": self.cmd_setpassenger,
@@ -314,7 +362,9 @@ class Bot:
             "/book <id> — xem trước kế hoạch, cần /confirm để đặt thật\n"
             "/confirm <mã> — xác nhận đặt vé thật (có hiệu lực 2 phút)\n"
             "/instant <id> on|off [HH:MM] — tự động giữ ghế liên tục (chưa thanh toán, tự giữ lại khi hết hạn)\n"
-            "  Thêm HH:MM (giờ dự kiến mở bán) để tự poll dồn dập quanh giờ đó, vd /instant <id> on 08:00\n"
+            "  Thêm HH:MM (giờ dự kiến mở bán) để tạm KHÔNG poll cho tới gần giờ đó, rồi tự chuyển sang dồn dập, vd /instant <id> on 08:00\n"
+            "  Hoặc bấm nút ⏱ trong /list rồi trả lời bằng giờ (HH:MM) trong tin nhắn tiếp theo\n"
+            "/cancel — huỷ thao tác đang chờ (đặt giờ qua nút, hoặc /confirm)\n"
             "/paid <id> — đánh dấu đã thanh toán xong (dừng auto-relock nếu đang instant)\n"
             "/passenger — xem tên/SĐT hành khách hiện tại\n"
             "/setpassenger <sđt> <tên> — đổi tên/SĐT hành khách dùng khi đặt vé thật\n"
@@ -490,6 +540,27 @@ class Bot:
         self.send(f"{status} (exit={returncode})\n<pre>{html.escape(output[-3500:])}</pre>", parse_mode="HTML")
         return ""
 
+    def cb_settime(self, item_id: str) -> str:
+        item = get_item(item_id, self.state_file)
+        if not item:
+            return f"Không tìm thấy id={item_id}"
+        self.pending_time_request = {
+            "item_id": item_id,
+            "expires_at": datetime.now() + timedelta(seconds=SETTIME_TTL_SECONDS),
+        }
+        current = f" (đang đặt: {item['target_time']})" if item.get("target_time") else ""
+        return (
+            f"🕐 Nhập giờ dự kiến mở bán cho [{item_id}]{current}, định dạng HH:MM hoặc HH:MM:SS "
+            f"(vd 08:00), có hiệu lực {SETTIME_TTL_SECONDS}s. Gõ /cancel để huỷ."
+        )
+
+    def cmd_cancel(self) -> str:
+        if not self.pending_time_request and not self.pending_confirm:
+            return "Không có thao tác nào đang chờ để huỷ."
+        self.pending_time_request = None
+        self.pending_confirm = None
+        return "Đã huỷ."
+
     def cmd_instant(self, rest: str) -> str:
         parts = rest.split()
         if len(parts) not in (2, 3) or parts[1].lower() not in ("on", "off"):
@@ -499,10 +570,7 @@ class Bot:
         if len(parts) == 3:
             if action != "on":
                 return "Chỉ dùng [HH:MM] khi bật (on), vd: /instant <id> on 08:00"
-            try:
-                fmt = "%H:%M:%S" if parts[2].count(":") == 2 else "%H:%M"
-                datetime.strptime(parts[2], fmt)
-            except ValueError:
+            if not parse_time_input(parts[2]):
                 return "Giờ không hợp lệ, dùng định dạng HH:MM hoặc HH:MM:SS (0-23h/0-59p), vd: /instant <id> on 08:00"
             target_time = parts[2]
         return self.set_instant(item_id, action == "on", target_time=target_time)
