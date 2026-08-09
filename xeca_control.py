@@ -43,6 +43,12 @@ INSTANT_CAMP_NOTIFY_INTERVAL_SECONDS = 300  # while continuously camping a sold-
 # about it, since notifying on every single 15s retry (up to 240/hour) risks tripping
 # Telegram's own flood limit — which, ironically, would then hit the exact failure mode
 # _safe_notify() below exists to survive.
+INSTANT_NOT_OPEN_NOTIFY_INTERVAL_SECONDS = 600  # same throttle, for the "not open yet"
+# case — instant mode can be turned on hours before a known target_time (see /instant
+# on <HH:MM>), and without this the 60s retry loop would notify every single cycle: ~240
+# messages/item over a 4h wait, well into Telegram flood-limit territory. The retry itself
+# still runs every INSTANT_RETRY_NOT_OPEN_SECONDS (or faster once in the tight window)
+# regardless — this only throttles how often we tell the user about it.
 
 
 def add_ticket_request(direction: str, depart_date: int, quantity: int = 1,
@@ -174,6 +180,7 @@ def instant_lock_loop(item_id: str, stop_event, notify,
 
     client = XecaClient()
     last_camp_notify = 0.0
+    last_not_open_notify = 0.0
     was_tight = False
     target_time_str = None
     target_ts = None
@@ -233,8 +240,16 @@ def instant_lock_loop(item_id: str, stop_event, notify,
                                      allow_middle_seats=True)
             except SaleNotOpenError as e:
                 wait_seconds = next_poll_interval(INSTANT_RETRY_NOT_OPEN_SECONDS, 0, target_ts)
-                if not tight_now:
-                    _safe_notify(f"⏳ [instant {item_id}] {e} (thử lại sau {int(wait_seconds)}s)")
+                # Suppressed entirely while tight (would be every 0.4s otherwise) and
+                # throttled to once per INSTANT_NOT_OPEN_NOTIFY_INTERVAL_SECONDS the rest of
+                # the time — the retry itself still runs at `wait_seconds` regardless, this
+                # only throttles how often we tell the user about it (see that constant's
+                # comment for why: instant can be left on for hours before a known
+                # target_time, and notifying every single 60s cycle floods Telegram).
+                now = time.time()
+                if not tight_now and now - last_not_open_notify >= INSTANT_NOT_OPEN_NOTIFY_INTERVAL_SECONDS:
+                    _safe_notify(f"⏳ [instant {item_id}] {e} (đang thử lại mỗi {int(wait_seconds)}s)")
+                    last_not_open_notify = now
                 if stop_event.wait(wait_seconds):
                     return
                 continue
