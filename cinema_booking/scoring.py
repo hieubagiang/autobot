@@ -68,7 +68,7 @@ def find_candidate_blocks(seat_map: SeatMap, quantity: int, zone: SeatZone | Non
     return candidates
 
 
-def pick_best_block(seat_map: SeatMap, quantity: int, prefer_sweetbox: bool = False) -> list | None:
+def pick_best_block(seat_map: SeatMap, quantity: int, prefer_sweetbox: bool = False) -> list[Seat] | None:
     if prefer_sweetbox:
         sweetbox_candidates = find_candidate_blocks(seat_map, quantity, zone=SeatZone.SWEETBOX)
         if sweetbox_candidates:

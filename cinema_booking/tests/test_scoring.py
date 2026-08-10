@@ -1,5 +1,5 @@
-from cinema_booking.scoring import vertical_score, is_center_half, seat_sort_key, leaves_isolated_gap
-from cinema_booking.types import Seat, SeatStatus, SeatZone
+from cinema_booking.scoring import vertical_score, is_center_half, seat_sort_key, leaves_isolated_gap, find_candidate_blocks, pick_best_block
+from cinema_booking.types import Seat, SeatStatus, SeatZone, SeatMap
 
 
 def test_peak_row_scores_highest():
@@ -93,10 +93,6 @@ def test_no_gap_when_block_is_at_row_end():
     assert leaves_isolated_gap(row, start_idx=1, length=2) is False
 
 
-from cinema_booking.scoring import find_candidate_blocks, pick_best_block
-from cinema_booking.types import SeatMap
-
-
 def make_row(statuses, zone=SeatZone.STANDARD, row="A"):
     return [
         Seat(id=f"{row}{i}", label=f"{row}{i}", row=row, col=i, zone=zone,
@@ -105,13 +101,31 @@ def make_row(statuses, zone=SeatZone.STANDARD, row="A"):
     ]
 
 
-def test_find_candidate_blocks_skips_sold_seats_and_mixed_zones():
+def test_find_candidate_blocks_skips_sold_seats():
     row_a = make_row([SeatStatus.AVAILABLE, SeatStatus.SOLD, SeatStatus.AVAILABLE, SeatStatus.AVAILABLE])
     seat_map = SeatMap(rows=["A"], seats_by_row={"A": row_a})
     candidates = find_candidate_blocks(seat_map, quantity=2)
     # Only seats 3-4 (index 2-3) form a legal pair; seats 1-2 are blocked by the sold seat.
     assert len(candidates) == 1
     assert [s.label for s in candidates[0]["seats"]] == ["A3", "A4"]
+
+
+def test_find_candidate_blocks_rejects_mixed_zones():
+    # Create a row where block [0:2] spans two zones: STANDARD and SWEETBOX.
+    # Both seats are AVAILABLE, no isolated gaps, but mixed zones should cause rejection.
+    standard_seat = Seat(id="A1", label="A1", row="A", col=1, zone=SeatZone.STANDARD,
+                         price=100000, status=SeatStatus.AVAILABLE)
+    sweetbox_seat = Seat(id="A2", label="A2", row="A", col=2, zone=SeatZone.SWEETBOX,
+                         price=100000, status=SeatStatus.AVAILABLE)
+    # Pad the row to avoid isolated gaps (need at least one more seat after sweetbox_seat)
+    padding_seat = Seat(id="A3", label="A3", row="A", col=3, zone=SeatZone.SWEETBOX,
+                        price=100000, status=SeatStatus.SOLD)
+    row_a = [standard_seat, sweetbox_seat, padding_seat]
+    seat_map = SeatMap(rows=["A"], seats_by_row={"A": row_a})
+    candidates = find_candidate_blocks(seat_map, quantity=2)
+    # The only possible 2-seat block is [A1(STANDARD), A2(SWEETBOX)], which should be rejected
+    # because it spans two zones. Expect no candidates.
+    assert len(candidates) == 0
 
 
 def test_pick_best_block_returns_none_when_sold_out():
