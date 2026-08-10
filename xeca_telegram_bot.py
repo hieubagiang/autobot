@@ -15,8 +15,9 @@ under each /list item — buttons call the same handlers as the text commands):
   /status                                                  - service + live sale-open check
   /book <id>                                               - preview plan, ask to /confirm
   /confirm <code>                                          - confirm the pending /book (real money!)
-  /instant <id> on|off [HH:MM]                             - keep re-locking a seat until stopped
-                                                              (optional HH:MM tightens polling near a known open time)
+  /instant <id> on|off [HH:MM] [dd/mm/yyyy]                - keep re-locking a seat until stopped
+                                                              (optional HH:MM tightens polling near a known open time;
+                                                              add a date if it's more than ~24h ahead)
   /passenger                                               - show the passenger name/phone used for real bookings
   /setpassenger <phone> <tên...>                            - change passenger name/phone
   /start /stop /restart                                    - control xeca-watch.service
@@ -68,7 +69,7 @@ BOT_COMMANDS = [
     {"command": "list", "description": "Xem watchlist"},
     {"command": "status", "description": "Trạng thái service + kiểm tra mở bán"},
     {"command": "book", "description": "Xem trước kế hoạch đặt vé (cần /confirm)"},
-    {"command": "instant", "description": "Bật/tắt tự động giữ ghế liên tục: <id> on|off [HH:MM]"},
+    {"command": "instant", "description": "Bật/tắt tự động giữ ghế liên tục: <id> on|off [HH:MM] [dd/mm/yyyy]"},
     {"command": "cancel", "description": "Huỷ thao tác đang chờ (đặt giờ / confirm)"},
     {"command": "paid", "description": "Đánh dấu 1 vé đã thanh toán xong: <id>"},
     {"command": "remove", "description": "Xoá 1 vé khỏi watchlist"},
@@ -84,14 +85,26 @@ BOT_COMMANDS = [
 
 
 def parse_date(text: str) -> int | None:
+    """Returns yyyymmdd as an int, or None if `text` isn't 'dd/mm/yyyy'/'yyyymmdd' shaped
+    OR isn't an actual calendar date (e.g. '32/13/2026' matches the digit-count shape but
+    isn't a real date — validated by round-tripping through datetime.date() rather than
+    just checking digit counts)."""
     text = text.strip()
     m = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", text)
     if m:
         d, mo, y = m.groups()
-        return int(f"{y}{mo}{d}")
-    if re.match(r"^\d{8}$", text):
-        return int(text)
-    return None
+        yyyymmdd_str = f"{y}{mo}{d}"
+    elif re.match(r"^\d{8}$", text):
+        yyyymmdd_str = text
+    else:
+        return None
+
+    yyyymmdd = int(yyyymmdd_str)
+    try:
+        datetime(yyyymmdd // 10000, (yyyymmdd // 100) % 100, yyyymmdd % 100)
+    except ValueError:
+        return None
+    return yyyymmdd
 
 
 STATUS_LABELS = {
@@ -272,13 +285,20 @@ class Bot:
                 self.pending_time_request = None
             else:
                 item_id = self.pending_time_request["item_id"]
-                target_time = parse_time_input(text)
+                reply_parts = text.split()
+                target_time = parse_time_input(reply_parts[0]) if reply_parts else None
                 if not target_time:
-                    self.send("Giờ không hợp lệ, dùng định dạng HH:MM hoặc HH:MM:SS (vd 08:00), hoặc /cancel để huỷ.")
+                    self.send("Giờ không hợp lệ, dùng HH:MM (vd 08:00) hoặc \"HH:MM dd/mm/yyyy\", hoặc /cancel để huỷ.")
                     return
+                yyyymmdd = None
+                if len(reply_parts) >= 2:
+                    yyyymmdd = parse_date(reply_parts[1])
+                    if yyyymmdd is None:
+                        self.send("Ngày không hợp lệ, dùng dd/mm/yyyy hoặc yyyymmdd sau giờ, vd \"08:00 13/08/2026\", hoặc /cancel để huỷ.")
+                        return
                 self.pending_time_request = None
                 try:
-                    reply = self.set_instant(item_id, True, target_time=resolve_target_time(target_time))
+                    reply = self.set_instant(item_id, True, target_time=resolve_target_time(target_time, yyyymmdd=yyyymmdd))
                 except Exception as e:
                     traceback.print_exc()
                     reply = f"❌ Lỗi: {e}"
@@ -373,9 +393,10 @@ class Bot:
             "/status — trạng thái service + kiểm tra mở bán trực tiếp\n"
             "/book <id> — xem trước kế hoạch, cần /confirm để đặt thật\n"
             "/confirm <mã> — xác nhận đặt vé thật (có hiệu lực 2 phút)\n"
-            "/instant <id> on|off [HH:MM] — tự động giữ ghế liên tục (chưa thanh toán, tự giữ lại khi hết hạn)\n"
+            "/instant <id> on|off [HH:MM] [dd/mm/yyyy] — tự động giữ ghế liên tục (chưa thanh toán, tự giữ lại khi hết hạn)\n"
             "  Thêm HH:MM (giờ dự kiến mở bán) để tạm KHÔNG poll cho tới gần giờ đó, rồi tự chuyển sang dồn dập, vd /instant <id> on 08:00\n"
-            "  Hoặc bấm nút ⏱ trong /list rồi trả lời bằng giờ (HH:MM) trong tin nhắn tiếp theo\n"
+            "  Thêm cả ngày nếu còn xa hơn ~24h, vd /instant <id> on 08:00 13/08/2026 (không thì hiểu là lần kế tiếp đồng hồ chỉ giờ đó)\n"
+            "  Hoặc bấm nút ⏱ trong /list rồi trả lời bằng giờ, có thể kèm ngày (\"HH:MM [dd/mm/yyyy]\") trong tin nhắn tiếp theo\n"
             "/cancel — huỷ thao tác đang chờ (đặt giờ qua nút, hoặc /confirm)\n"
             "/paid <id> — đánh dấu đã thanh toán xong (dừng auto-relock nếu đang instant)\n"
             "/passenger — xem tên/SĐT hành khách hiện tại\n"
@@ -562,8 +583,9 @@ class Bot:
         }
         current = f" (đang đặt: {format_target_time_display(item['target_time'])})" if item.get("target_time") else ""
         return (
-            f"🕐 Nhập giờ dự kiến mở bán cho [{item_id}]{current}, định dạng HH:MM hoặc HH:MM:SS "
-            f"(vd 08:00), có hiệu lực {SETTIME_TTL_SECONDS}s. Gõ /cancel để huỷ."
+            f"🕐 Nhập giờ dự kiến mở bán cho [{item_id}]{current}: HH:MM (vd 08:00) cho hôm nay/gần nhất, "
+            f"hoặc thêm ngày \"HH:MM dd/mm/yyyy\" (vd 08:00 13/08/2026) nếu còn xa. "
+            f"Có hiệu lực {SETTIME_TTL_SECONDS}s. Gõ /cancel để huỷ."
         )
 
     def cmd_cancel(self) -> str:
@@ -575,20 +597,27 @@ class Bot:
 
     def cmd_instant(self, rest: str) -> str:
         parts = rest.split()
-        if len(parts) not in (2, 3) or parts[1].lower() not in ("on", "off"):
-            return "Cú pháp: /instant <id> on|off [HH:MM]"
+        if len(parts) not in (2, 3, 4) or parts[1].lower() not in ("on", "off"):
+            return "Cú pháp: /instant <id> on|off [HH:MM] [dd/mm/yyyy]"
         item_id, action = parts[0], parts[1].lower()
         target_time = None
-        if len(parts) == 3:
+        if len(parts) >= 3:
             if action != "on":
                 return "Chỉ dùng [HH:MM] khi bật (on), vd: /instant <id> on 08:00"
             if not parse_time_input(parts[2]):
                 return "Giờ không hợp lệ, dùng định dạng HH:MM hoặc HH:MM:SS (0-23h/0-59p), vd: /instant <id> on 08:00"
+            yyyymmdd = None
+            if len(parts) == 4:
+                yyyymmdd = parse_date(parts[3])
+                if yyyymmdd is None:
+                    return "Ngày không hợp lệ, dùng dd/mm/yyyy hoặc yyyymmdd, vd: /instant <id> on 08:00 13/08/2026"
             # Resolved to a concrete absolute datetime right now, not stored as the bare
             # "HH:MM" — see xeca_client.resolve_target_time()'s docstring (2026-08-10
             # incident: re-parsing a bare "HH:MM" after a service restart past that time
             # silently rolled the target to tomorrow, abandoning real active seat holds).
-            target_time = resolve_target_time(parts[2])
+            # Passing an explicit date avoids the separate "next occurrence" ambiguity
+            # when scheduling more than ~24h ahead of the real date.
+            target_time = resolve_target_time(parts[2], yyyymmdd=yyyymmdd)
         return self.set_instant(item_id, action == "on", target_time=target_time)
 
     def set_instant(self, item_id: str, enable: bool, target_time: str | None = None) -> str:

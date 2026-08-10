@@ -42,10 +42,20 @@ def parse_target_time(value: str) -> float:
 STORED_TARGET_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
-def resolve_target_time(value: str) -> str:
+def resolve_target_time(value: str, yyyymmdd: int | None = None) -> str:
     """Resolves a user-typed 'HH:MM'/'HH:MM:SS' into a CONCRETE absolute
     'YYYY-MM-DD HH:MM:SS' string, to be persisted (e.g. item["target_time"]) instead of
-    the bare input. This must happen exactly once, at set-time — incident 2026-08-10:
+    the bare input.
+
+    If `yyyymmdd` is given (e.g. 20260813), builds the target for that EXACT date
+    directly — no "next occurrence from now" involved at all, so this is safe to set any
+    number of days in advance (the gap flagged right after the incident below: setting a
+    bare "08:00" more than ~24h ahead of the real date would resolve to the wrong day).
+    Without it, falls back to "the next time the clock reads this value from right now"
+    (parse_target_time) — only safe when set close to the same day, which is the common
+    case (turning instant on shortly before a same-day announced opening).
+
+    This must happen exactly once, at set-time — incident 2026-08-10:
     instant_lock_loop used to call parse_target_time() fresh on every loop iteration
     against the stored bare "HH:MM", relying on in-memory caching (only re-parse when the
     string changes) to keep the resolved timestamp stable. That cache is thread-local and
@@ -61,6 +71,13 @@ def resolve_target_time(value: str) -> str:
     at any later wall-clock time, always return the exact same original instant — for good
     or bad (see parse_stored_target_time's docstring on why letting `target_time` itself be
     a stale absolute instant is fine and even correct)."""
+    parts = [int(p) for p in value.split(":")]
+    while len(parts) < 3:
+        parts.append(0)
+    if yyyymmdd is not None:
+        year, month, day = yyyymmdd // 10000, (yyyymmdd // 100) % 100, yyyymmdd % 100
+        target = datetime.datetime(year, month, day, parts[0], parts[1], parts[2])
+        return target.strftime(STORED_TARGET_TIME_FORMAT)
     ts = parse_target_time(value)
     return datetime.datetime.fromtimestamp(ts).strftime(STORED_TARGET_TIME_FORMAT)
 
