@@ -1,6 +1,8 @@
 from datetime import date, timedelta
 
 from cinema_booking.provider import CinemaProvider
+from cinema_booking.scoring import pick_best_block
+from cinema_booking.state import DEFAULT_STATE_FILE, get_item, update_item
 from cinema_booking.types import Showtime
 
 MON_WED = {0, 2}  # date.weekday(): Monday=0 .. Sunday=6
@@ -63,3 +65,37 @@ def rank_showtime_candidates(provider: CinemaProvider, cinema_priority: list[str
         for day in ranked_dates:
             candidates.extend(provider.list_showtimes(cinema, movie_query, (day, day)))
     return candidates
+
+
+def instant_camp_loop(item_id: str, stop_event, notify, state_file: str = DEFAULT_STATE_FILE,
+                       poll_interval_seconds: float = 5.0) -> None:
+    item = get_item(item_id, state_file)
+    if item is None:
+        return
+    provider = get_provider(item["provider"])
+
+    while not stop_event.is_set():
+        if not provider.is_logged_in():
+            notify(f"[{item_id}] Provider {item['provider']} chưa đăng nhập — vui lòng đăng nhập lại.")
+            stop_event.wait(poll_interval_seconds)
+            continue
+
+        candidates = rank_showtime_candidates(
+            provider, item["cinema_priority"], item["movie_query"], item["date_range"]
+        )
+        for showtime in candidates:
+            seat_map = provider.get_seat_map(showtime)
+            block = pick_best_block(seat_map, item["quantity"], item["prefer_sweetbox"])
+            if block is None:
+                continue
+            result = provider.lock_seats(showtime, block)
+            if result.success:
+                seat_labels = [s.label for s in block]
+                update_item(item_id, path=state_file, status="pending_payment",
+                            hold_expiry=result.hold_expiry, payment_url=result.payment_url,
+                            seat_labels=seat_labels)
+                notify(f"[{item_id}] Đã giữ ghế: {', '.join(seat_labels)} — "
+                       f"hạn giữ chỗ: {result.hold_expiry}. Link: {result.payment_url}")
+                return
+
+        stop_event.wait(poll_interval_seconds)
