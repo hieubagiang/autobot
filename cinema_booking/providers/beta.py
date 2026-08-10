@@ -1,8 +1,10 @@
 import re
 from datetime import datetime
+from typing import Callable
 
 import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
 from cinema_booking.provider import CinemaProvider
 from cinema_booking.types import Cinema, Seat, SeatMap, SeatStatus, SeatZone, Showtime
@@ -50,6 +52,10 @@ DEFAULT_ZONE = SeatZone.STANDARD
 
 _ROW_LETTER_RE = re.compile(r"^\D+")
 _SEAT_NUMBER_RE = re.compile(r"(\d+)$")
+
+
+def _page_shows_logged_in(html: str) -> bool:
+    return "Xin chào:" in html
 
 
 def parse_seat_map(html: str) -> SeatMap:
@@ -112,17 +118,55 @@ class BetaProvider(CinemaProvider):
     implemented in later tasks.
     """
 
-    def __init__(self):
+    def __init__(self, profile_dir: str = ".chrome_profiles/beta",
+                 notify: Callable[[str], None] | None = None):
         # showtime.id (the "s" URL param) -> film_session_id (the "f" URL param), a
         # DIFFERENT guid than either showtime.id or showtime.cinema.id. Populated as a
         # side effect of list_showtimes, since that's the only place this value is
-        # available (parsed from bookingSeat(...) and otherwise discarded). Task 14 will
-        # add more state to __init__ (profile_dir, notify, Playwright handles, etc.) --
-        # merge into this same __init__ rather than adding a second one.
+        # available (parsed from bookingSeat(...) and otherwise discarded).
         self._film_session_ids: dict[str, str] = {}
 
+        # Playwright setup (Task 14). The persistent context/page are created lazily,
+        # on first call to _page() -- not here -- so unit tests of list_cinemas /
+        # list_showtimes / _find_film_id stay free of any browser dependency.
+        self.profile_dir = profile_dir
+        self.notify = notify or (lambda message: None)
+        self._playwright = None
+        self._context = None
+        self._page_obj = None
+
+    def _page(self):
+        if self._page_obj is None:
+            self._playwright = sync_playwright().start()
+            self._context = self._playwright.chromium.launch_persistent_context(
+                self.profile_dir, headless=False,
+            )
+            self._page_obj = self._context.pages[0] if self._context.pages else self._context.new_page()
+        return self._page_obj
+
     def is_logged_in(self) -> bool:
-        raise NotImplementedError  # Task 14
+        page = self._page()
+        page.goto(HOME_URL)
+        return _page_shows_logged_in(page.content())
+
+    def login_via_facebook(self) -> bool:
+        page = self._page()
+        page.goto("https://betacinemas.vn/login.htm")
+        page.evaluate("loginByFacebook()")
+        popup = page.wait_for_event("popup")
+        try:
+            continue_button = popup.get_by_role(
+                "button", name=re.compile(r"^Tiếp tục dưới tên")
+            )
+            continue_button.wait_for(timeout=15000)
+        except Exception:
+            self.notify(
+                "[beta] Facebook không hiện màn hình 'Tiếp tục' như mong đợi — "
+                "có thể cần đăng nhập lại tay hoặc xác minh thêm."
+            )
+            return False
+        continue_button.click()
+        return True
 
     def get_seat_map(self, showtime: Showtime) -> SeatMap:
         # self._page() is provided by Task 14 (persistent authenticated Playwright

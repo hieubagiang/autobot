@@ -174,12 +174,18 @@ def test_beta_provider_placeholder_methods_raise_not_implemented():
 
     provider = BetaProvider()
     showtime = None
-    # get_seat_map is implemented as of Task 13 (see the parse_seat_map tests below) and
-    # is exercised separately; only the still-unimplemented Task 14/15 methods remain here.
-    with pytest.raises(NotImplementedError):
-        provider.is_logged_in()
+    # get_seat_map is implemented as of Task 13, and is_logged_in/login_via_facebook as
+    # of Task 14 (see their own tests below); only the still-unimplemented Task 15
+    # method remains here.
     with pytest.raises(NotImplementedError):
         provider.lock_seats(showtime, [])
+
+
+def test_is_logged_in_reads_greeting_marker():
+    from cinema_booking.providers.beta import _page_shows_logged_in
+
+    assert _page_shows_logged_in("...Xin chào: Phạm Doãn Hiếu ...") is True
+    assert _page_shows_logged_in("...ĐĂNG NHẬP ĐĂNG KÝ...") is False
 
 
 @pytest.fixture
