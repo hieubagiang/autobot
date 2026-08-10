@@ -16,6 +16,11 @@ def beta_showtimes_json():
     return json.loads((FIXTURES / "beta_showtimes_response.json").read_text(encoding="utf-8"))
 
 
+@pytest.fixture
+def beta_lock_response_json():
+    return json.loads((FIXTURES / "beta_lock_response.json").read_text(encoding="utf-8"))
+
+
 def test_list_cinemas_parses_every_choosecinema_call(beta_home_html, monkeypatch):
     from cinema_booking.providers.beta import BetaProvider
 
@@ -167,18 +172,6 @@ def test_list_showtimes_records_film_session_id_per_show_id_for_get_seat_map(
         assert provider._film_session_ids[showtime.id] == "842328a0-c4e3-4e1f-8597-20d35312d126"
     # And it must NOT be confused with the cinema (theater) guid used to call it.
     assert provider._film_session_ids[showtimes[0].id] != cinema.id
-
-
-def test_beta_provider_placeholder_methods_raise_not_implemented():
-    from cinema_booking.providers.beta import BetaProvider
-
-    provider = BetaProvider()
-    showtime = None
-    # get_seat_map is implemented as of Task 13, and is_logged_in/login_via_facebook as
-    # of Task 14 (see their own tests below); only the still-unimplemented Task 15
-    # method remains here.
-    with pytest.raises(NotImplementedError):
-        provider.lock_seats(showtime, [])
 
 
 def test_is_logged_in_reads_greeting_marker():
@@ -350,3 +343,246 @@ def test_get_seat_map_raises_value_error_when_film_session_id_unknown():
 
     with pytest.raises(ValueError):
         provider.get_seat_map(showtime)
+
+
+# ---------------------------------------------------------------------------
+# Task 15: seat locking
+# ---------------------------------------------------------------------------
+
+
+def test_parse_lock_response_success_reads_real_fixture(beta_lock_response_json):
+    # beta_lock_response.json is the REAL captured SelectSeat response from Task 12's
+    # live spike: {"d": "{\"SeatIndex\":5,\"SeatStatus\":1,\"IsYourSeat\":true}"} -- a
+    # JSON string nested inside the outer JSON's "d" field. parse_lock_response must
+    # parse that nested string, not treat "d" as already-structured data.
+    from cinema_booking.providers.beta import parse_lock_response
+
+    success, error = parse_lock_response(beta_lock_response_json)
+    assert success is True
+    assert error is None
+
+
+def test_parse_lock_response_failure_when_is_your_seat_false():
+    # Hand-constructed failure variant in the SAME real shape (nested "d" JSON string),
+    # with IsYourSeat:false -- e.g. someone else grabbed the seat first. There is no
+    # "message" field in Beta's real response (that was the plan's placeholder, not the
+    # real shape), so the error must be synthesized from the fields that DO exist.
+    from cinema_booking.providers.beta import parse_lock_response
+
+    raw = {"d": '{"SeatIndex":5,"SeatStatus":1,"IsYourSeat":false}'}
+    success, error = parse_lock_response(raw)
+    assert success is False
+    assert error is not None
+    assert "False" in error or "false" in error.lower()
+
+
+def test_parse_lock_response_double_parses_nested_json_string():
+    # Explicit regression guard: if someone "simplifies" parse_lock_response to read
+    # data["d"] directly as a dict (skipping the second json.loads), this must fail loudly
+    # rather than silently -- data["d"] is a STRING, not a dict, in the real API.
+    from cinema_booking.providers.beta import parse_lock_response
+
+    raw = {"d": '{"SeatIndex":7,"SeatStatus":1,"IsYourSeat":true}'}
+    assert isinstance(raw["d"], str)  # sanity: the fixture shape really is string-nested
+    success, error = parse_lock_response(raw)
+    assert success is True
+    assert error is None
+
+
+class _FakeLockPage:
+    """Minimal stand-in for a Playwright Page, for lock_seats tests.
+
+    Real BetaProvider.lock_seats calls page.evaluate("customerId") (no arg) once to read
+    the live customerId JS global, then page.evaluate(<fetch script>, [path, seatIndex,
+    showId, customerId]) once per SelectSeat/ReturnSeat call. This fake tells those two
+    apart the same way the real evaluate() call sites do: no second argument vs. one.
+    """
+
+    def __init__(self, customer_id: str, responses: list[dict]):
+        self.customer_id = customer_id
+        self._responses = list(responses)
+        self.evaluate_calls: list[tuple[str, list]] = []  # (script, [path, seat, show, cust])
+        self.goto_calls: list[str] = []
+
+    def goto(self, url: str):
+        self.goto_calls.append(url)
+
+    def evaluate(self, script, arg=None):
+        if arg is None:
+            return self.customer_id
+        self.evaluate_calls.append((script, arg))
+        return self._responses.pop(0)
+
+
+def _select_seat_response(seat_index: int, is_your_seat: bool) -> dict:
+    inner = json.dumps({"SeatIndex": seat_index, "SeatStatus": 1, "IsYourSeat": is_your_seat})
+    return {"d": inner}
+
+
+def _beta_lock_fixtures():
+    from cinema_booking.types import Cinema, Seat, SeatStatus, SeatZone, Showtime
+
+    cinema = Cinema(id="381f745f-c110-4d0c-9117-3a79f36ba9c4", name="Beta Tây Sơn",
+                     city="", provider="beta")
+    showtime = Showtime(id="show-1", movie="Người Nhện: Khởi Đầu Mới", cinema=cinema,
+                         start_time="08:10", date="2026-08-13")
+    seat_a1 = Seat(id="5", label="A1", row="A", col=1, zone=SeatZone.STANDARD,
+                   price=50000, status=SeatStatus.AVAILABLE)
+    seat_a2 = Seat(id="6", label="A2", row="A", col=2, zone=SeatZone.STANDARD,
+                   price=50000, status=SeatStatus.AVAILABLE)
+    return showtime, seat_a1, seat_a2
+
+
+def test_lock_seats_calls_select_seat_once_per_seat_using_seat_id_in_order(monkeypatch):
+    from cinema_booking.providers.beta import BetaProvider, SELECT_SEAT_PATH
+    showtime, seat_a1, seat_a2 = _beta_lock_fixtures()
+
+    provider = BetaProvider()
+    provider._film_session_ids[showtime.id] = "fsid-1"
+    fake_page = _FakeLockPage(
+        customer_id="cust-guid-1",
+        responses=[_select_seat_response(5, True), _select_seat_response(6, True)],
+    )
+    monkeypatch.setattr(provider, "_page", lambda: fake_page, raising=False)
+
+    result = provider.lock_seats(showtime, [seat_a1, seat_a2])
+
+    assert result.success is True
+    assert result.error is None
+    calls = [arg for _script, arg in fake_page.evaluate_calls]
+    # seat.id ("5"/"6"), not seat.label ("A1"/"A2"), is what goes into aData -- and the
+    # customerId read live from the page threads through to every call.
+    assert calls == [
+        [SELECT_SEAT_PATH, "5", "show-1", "cust-guid-1"],
+        [SELECT_SEAT_PATH, "6", "show-1", "cust-guid-1"],
+    ]
+
+
+def test_lock_seats_navigates_to_seat_page_with_film_session_id(monkeypatch):
+    from cinema_booking.providers.beta import BetaProvider, SEAT_MAP_URL
+    showtime, seat_a1, _seat_a2 = _beta_lock_fixtures()
+
+    provider = BetaProvider()
+    provider._film_session_ids[showtime.id] = "fsid-1"
+    fake_page = _FakeLockPage(customer_id="cust-guid-1", responses=[_select_seat_response(5, True)])
+    monkeypatch.setattr(provider, "_page", lambda: fake_page, raising=False)
+
+    provider.lock_seats(showtime, [seat_a1])
+
+    assert fake_page.goto_calls == [f"{SEAT_MAP_URL}?f=fsid-1&s=show-1"]
+
+
+def test_lock_seats_computes_hold_expiry_as_roughly_ten_minutes_from_now(monkeypatch):
+    from datetime import datetime, timedelta
+
+    from cinema_booking.providers.beta import BetaProvider
+    showtime, seat_a1, _seat_a2 = _beta_lock_fixtures()
+
+    provider = BetaProvider()
+    provider._film_session_ids[showtime.id] = "fsid-1"
+    fake_page = _FakeLockPage(customer_id="cust-guid-1", responses=[_select_seat_response(5, True)])
+    monkeypatch.setattr(provider, "_page", lambda: fake_page, raising=False)
+
+    before = datetime.now()
+    result = provider.lock_seats(showtime, [seat_a1])
+    after = datetime.now()
+
+    expiry = datetime.fromisoformat(result.hold_expiry)
+    # Beta's confirmed hold mechanism is a 10-minute ESTIMATE (see design spec addendum),
+    # not a server-guaranteed per-seat deadline -- assert it's roughly 10 minutes out,
+    # with slack for test execution time.
+    assert before + timedelta(minutes=9, seconds=55) <= expiry <= after + timedelta(minutes=10, seconds=5)
+
+
+def test_lock_seats_rolls_back_already_locked_seats_on_partial_failure(monkeypatch):
+    # Locking a block of seats means one SelectSeat call per seat (confirmed live: 2
+    # seats -> 2 separate requests). If seat A2 fails after A1 already locked, A1 must be
+    # released via ReturnSeat before returning failure, to avoid an orphaned partial hold.
+    from cinema_booking.providers.beta import BetaProvider, RETURN_SEAT_PATH, SELECT_SEAT_PATH
+    showtime, seat_a1, seat_a2 = _beta_lock_fixtures()
+
+    provider = BetaProvider()
+    provider._film_session_ids[showtime.id] = "fsid-1"
+    fake_page = _FakeLockPage(
+        customer_id="cust-guid-1",
+        responses=[
+            _select_seat_response(5, True),    # A1 locks fine
+            _select_seat_response(6, False),   # A2 fails -- someone else grabbed it
+            _select_seat_response(5, False),   # ReturnSeat rollback of A1 confirms release
+        ],
+    )
+    monkeypatch.setattr(provider, "_page", lambda: fake_page, raising=False)
+
+    result = provider.lock_seats(showtime, [seat_a1, seat_a2])
+
+    assert result.success is False
+    assert result.hold_expiry is None
+    assert result.error is not None
+
+    calls = [arg for _script, arg in fake_page.evaluate_calls]
+    assert calls == [
+        [SELECT_SEAT_PATH, "5", "show-1", "cust-guid-1"],
+        [SELECT_SEAT_PATH, "6", "show-1", "cust-guid-1"],
+        [RETURN_SEAT_PATH, "5", "show-1", "cust-guid-1"],  # only A1 -- A2 never locked
+    ]
+
+
+def test_lock_seats_does_not_call_return_seat_when_first_seat_fails(monkeypatch):
+    # If the very first seat fails, nothing was locked yet in this attempt, so there is
+    # nothing to roll back -- no ReturnSeat call should be made.
+    from cinema_booking.providers.beta import BetaProvider, RETURN_SEAT_PATH
+    showtime, seat_a1, _seat_a2 = _beta_lock_fixtures()
+
+    provider = BetaProvider()
+    provider._film_session_ids[showtime.id] = "fsid-1"
+    fake_page = _FakeLockPage(customer_id="cust-guid-1", responses=[_select_seat_response(5, False)])
+    monkeypatch.setattr(provider, "_page", lambda: fake_page, raising=False)
+
+    result = provider.lock_seats(showtime, [seat_a1])
+
+    assert result.success is False
+    assert not any(arg[0] == RETURN_SEAT_PATH for _script, arg in fake_page.evaluate_calls)
+
+
+def test_lock_seats_notifies_when_rollback_release_not_confirmed(monkeypatch):
+    # If ReturnSeat's own response doesn't confirm the release (IsYourSeat still true),
+    # that's a possible orphaned hold -- lock_seats must surface it via notify() rather
+    # than silently swallowing it, since there's nothing more it can do automatically.
+    from cinema_booking.providers.beta import BetaProvider
+    showtime, seat_a1, seat_a2 = _beta_lock_fixtures()
+
+    notifications = []
+    provider = BetaProvider(notify=notifications.append)
+    provider._film_session_ids[showtime.id] = "fsid-1"
+    fake_page = _FakeLockPage(
+        customer_id="cust-guid-1",
+        responses=[
+            _select_seat_response(5, True),   # A1 locks fine
+            _select_seat_response(6, False),  # A2 fails
+            _select_seat_response(5, True),   # ReturnSeat rollback of A1 -- NOT confirmed released
+        ],
+    )
+    monkeypatch.setattr(provider, "_page", lambda: fake_page, raising=False)
+
+    result = provider.lock_seats(showtime, [seat_a1, seat_a2])
+
+    assert result.success is False
+    assert len(notifications) == 1
+    assert "A1" in notifications[0]
+
+
+def test_lock_seats_raises_value_error_when_film_session_id_unknown():
+    # Same contract as get_seat_map: a Showtime that never went through this provider
+    # instance's list_showtimes() has no known film_session_id -- lock_seats must fail
+    # loudly rather than silently building a URL with the wrong guid.
+    from cinema_booking.providers.beta import BetaProvider
+    from cinema_booking.types import Cinema, Showtime
+
+    provider = BetaProvider()
+    cinema = Cinema(id="381f745f-c110-4d0c-9117-3a79f36ba9c4", name="Beta Tây Sơn",
+                     city="", provider="beta")
+    showtime = Showtime(id="unknown-show-id", movie="Some Movie", cinema=cinema,
+                         start_time="08:10", date="2026-08-11")
+
+    with pytest.raises(ValueError):
+        provider.lock_seats(showtime, [])
