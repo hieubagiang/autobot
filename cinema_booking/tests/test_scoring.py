@@ -91,3 +91,47 @@ def test_no_gap_when_block_is_at_row_end():
     # [sold, taken, taken] -> block at row end, no isolated gap on right (row edge).
     row = [seat(SeatStatus.SOLD), seat(SeatStatus.AVAILABLE), seat(SeatStatus.AVAILABLE)]
     assert leaves_isolated_gap(row, start_idx=1, length=2) is False
+
+
+from cinema_booking.scoring import find_candidate_blocks, pick_best_block
+from cinema_booking.types import SeatMap
+
+
+def make_row(statuses, zone=SeatZone.STANDARD, row="A"):
+    return [
+        Seat(id=f"{row}{i}", label=f"{row}{i}", row=row, col=i, zone=zone,
+             price=100000, status=status)
+        for i, status in enumerate(statuses, start=1)
+    ]
+
+
+def test_find_candidate_blocks_skips_sold_seats_and_mixed_zones():
+    row_a = make_row([SeatStatus.AVAILABLE, SeatStatus.SOLD, SeatStatus.AVAILABLE, SeatStatus.AVAILABLE])
+    seat_map = SeatMap(rows=["A"], seats_by_row={"A": row_a})
+    candidates = find_candidate_blocks(seat_map, quantity=2)
+    # Only seats 3-4 (index 2-3) form a legal pair; seats 1-2 are blocked by the sold seat.
+    assert len(candidates) == 1
+    assert [s.label for s in candidates[0]["seats"]] == ["A3", "A4"]
+
+
+def test_pick_best_block_returns_none_when_sold_out():
+    row_a = make_row([SeatStatus.SOLD, SeatStatus.SOLD])
+    seat_map = SeatMap(rows=["A"], seats_by_row={"A": row_a})
+    assert pick_best_block(seat_map, quantity=2) is None
+
+
+def test_pick_best_block_prefers_sweetbox_when_flagged():
+    row_a = make_row([SeatStatus.AVAILABLE] * 4, zone=SeatZone.STANDARD, row="A")
+    row_b = make_row([SeatStatus.AVAILABLE] * 4, zone=SeatZone.SWEETBOX, row="B")
+    seat_map = SeatMap(rows=["A", "B"], seats_by_row={"A": row_a, "B": row_b})
+    block = pick_best_block(seat_map, quantity=2, prefer_sweetbox=True)
+    assert all(s.zone == SeatZone.SWEETBOX for s in block)
+
+
+def test_pick_best_block_falls_back_to_standard_when_no_sweetbox_available():
+    row_a = make_row([SeatStatus.AVAILABLE] * 4, zone=SeatZone.STANDARD, row="A")
+    row_b = make_row([SeatStatus.SOLD] * 4, zone=SeatZone.SWEETBOX, row="B")
+    seat_map = SeatMap(rows=["A", "B"], seats_by_row={"A": row_a, "B": row_b})
+    block = pick_best_block(seat_map, quantity=2, prefer_sweetbox=True)
+    assert block is not None
+    assert all(s.zone == SeatZone.STANDARD for s in block)
