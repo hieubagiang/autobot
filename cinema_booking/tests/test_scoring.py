@@ -1,4 +1,5 @@
-from cinema_booking.scoring import vertical_score, is_center_half, seat_sort_key
+from cinema_booking.scoring import vertical_score, is_center_half, seat_sort_key, leaves_isolated_gap
+from cinema_booking.types import Seat, SeatStatus, SeatZone
 
 
 def test_peak_row_scores_highest():
@@ -47,3 +48,33 @@ def test_sort_key_falls_back_to_vertical_then_center_distance_outside_band():
     closer_to_center = seat_sort_key(8, total_rows, 16, total_cols)
     farther_from_center = seat_sort_key(8, total_rows, 20, total_cols)
     assert closer_to_center > farther_from_center
+
+
+def seat(status):
+    return Seat(id="x", label="X", row="A", col=1, zone=SeatZone.STANDARD,
+                price=100000, status=status)
+
+
+def test_no_gap_when_block_is_at_row_start():
+    row = [seat(SeatStatus.AVAILABLE), seat(SeatStatus.AVAILABLE), seat(SeatStatus.SOLD)]
+    assert leaves_isolated_gap(row, start_idx=0, length=2) is False
+
+
+def test_isolated_single_seat_on_the_right_is_rejected():
+    # [taken, taken, LONE EMPTY, sold] -> index 2 would be an isolated single gap.
+    row = [seat(SeatStatus.AVAILABLE), seat(SeatStatus.AVAILABLE),
+           seat(SeatStatus.AVAILABLE), seat(SeatStatus.SOLD)]
+    assert leaves_isolated_gap(row, start_idx=0, length=2) is True
+
+
+def test_two_empty_seats_on_the_right_is_not_isolated():
+    # [taken, taken, empty, empty] -> the two empties aren't a lone gap.
+    row = [seat(SeatStatus.AVAILABLE)] * 4
+    assert leaves_isolated_gap(row, start_idx=0, length=2) is False
+
+
+def test_isolated_single_seat_on_the_left_is_rejected():
+    # [sold, LONE EMPTY, taken, taken] -> index 1 is isolated.
+    row = [seat(SeatStatus.SOLD), seat(SeatStatus.AVAILABLE),
+           seat(SeatStatus.AVAILABLE), seat(SeatStatus.AVAILABLE)]
+    assert leaves_isolated_gap(row, start_idx=1, length=2) is True
