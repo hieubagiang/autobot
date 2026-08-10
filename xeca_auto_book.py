@@ -201,17 +201,28 @@ def find_best_available_bus(client: XecaClient, depart_date: int, direction: dic
         detail = details_by_id.get(bus_time["id"])
         if detail is None:
             continue
-        open_status, reason = is_sale_open(
-            detail.get("busStageSpecialRules", []), depart_date, bus_time.get("bus_stage_id"),
-        )
-        if not open_status:
-            last_reason = reason
-            continue
-        any_open = True
 
+        # ALWAYS try selecting real seats first — never let is_sale_open() gate the
+        # attempt. Confirmed live 2026-08-10: busStageSpecialRules reported
+        # not_allow_book=1 (message "Vé thuộc dịp lễ...") purely as an informational
+        # banner Xeca's own site shows on seat click — clicking through still booked
+        # successfully on the real site the whole time. Trusting that flag as a hard
+        # gate here meant the bot refused to even attempt a real, bookable seat from
+        # 08:03-08:05, forcing a manual purchase instead. The seatMap response is the
+        # actual authoritative "can I book this" signal; is_sale_open() is now only
+        # used below, for the exception type / retry-cadence hint when NOTHING across
+        # every candidate yields a seat.
         seats = select_seats(detail.get("seatMap", {}), quantity, allow_middle=allow_middle_seats)
         if len(seats) >= quantity:
             return bus_time, seats
+
+        open_status, reason = is_sale_open(
+            detail.get("busStageSpecialRules", []), depart_date, bus_time.get("bus_stage_id"),
+        )
+        if open_status:
+            any_open = True
+        else:
+            last_reason = reason
 
     if not any_open:
         raise SaleNotOpenError(f"Chưa mở bán: {last_reason}")
