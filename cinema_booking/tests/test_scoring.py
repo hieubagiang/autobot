@@ -1,4 +1,4 @@
-from cinema_booking.scoring import vertical_score
+from cinema_booking.scoring import vertical_score, is_center_half, seat_sort_key
 
 
 def test_peak_row_scores_highest():
@@ -22,3 +22,28 @@ def test_single_row_always_scores_perfectly():
 def test_front_row_scores_lower_than_back_row():
     total_rows = 12
     assert vertical_score(1, total_rows) < vertical_score(total_rows, total_rows)
+
+
+def test_is_center_half_boundaries_on_20_cols():
+    # total_cols=20 -> center half is cols 5..15 inclusive
+    assert is_center_half(5, 20) is True
+    assert is_center_half(15, 20) is True
+    assert is_center_half(4, 20) is False
+    assert is_center_half(16, 20) is False
+
+
+def test_sort_key_prefers_center_half_over_better_vertical_score():
+    total_rows, total_cols = 12, 20
+    center_seat_ok_vertical = seat_sort_key(row_index=6, total_rows=total_rows,
+                                             col_index=10, total_cols=total_cols)
+    edge_seat_best_vertical = seat_sort_key(row_index=8, total_rows=total_rows,
+                                             col_index=1, total_cols=total_cols)
+    assert center_seat_ok_vertical > edge_seat_best_vertical
+
+
+def test_sort_key_falls_back_to_vertical_then_center_distance_outside_band():
+    total_rows, total_cols = 12, 20
+    # Both outside the center-half band (cols 5..15); col 16 is closer to center than col 20.
+    closer_to_center = seat_sort_key(8, total_rows, 16, total_cols)
+    farther_from_center = seat_sort_key(8, total_rows, 20, total_cols)
+    assert closer_to_center > farther_from_center
