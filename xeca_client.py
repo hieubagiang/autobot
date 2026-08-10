@@ -404,18 +404,22 @@ DIRECTIONS = {
         "label": "Hà Nội → Hà Tĩnh",
         "from_province_id": 2,
         "to_province_id": 3,
-        "default_pickup_name": "493 Nguyễn Trãi",
-        "default_dropoff_name": "VP THẠCH HÀ - HT",
+        "default_pickup_name": ["493 Nguyễn Trãi"],
+        "default_dropoff_name": ["VP THẠCH HÀ - HT"],
         "coastal_pickup_name": None,
-        "coastal_dropoff_name": "XANH ĐỎ THẠCH LONG - HT",
+        "coastal_dropoff_name": ["XANH ĐỎ THẠCH LONG - HT"],
     },
     "HT-HN": {
         "label": "Hà Tĩnh → Hà Nội",
         "from_province_id": 3,
         "to_province_id": 2,
-        "default_pickup_name": "VP THẠCH HÀ - HT",
-        "default_dropoff_name": "Số 275 Nguyễn Trãi",
-        "coastal_pickup_name": "XANH ĐỎ THẠCH LONG - HT",
+        "default_pickup_name": ["VP THẠCH HÀ - HT"],
+        # "BX YÊN NGHĨA" fallback added 2026-08-10: some buses on this route/date have no
+        # "Số 275 Nguyễn Trãi" at all (a different operator/bus_stage config) — confirmed
+        # live via a real not-found error listing every point actually available on
+        # bus_time_id 18251, which included BX YÊN NGHĨA but not Nguyễn Trãi.
+        "default_dropoff_name": ["Số 275 Nguyễn Trãi", "BX YÊN NGHĨA"],
+        "coastal_pickup_name": ["XANH ĐỎ THẠCH LONG - HT"],
         "coastal_dropoff_name": None,
     },
 }
@@ -517,10 +521,20 @@ def is_coastal_route(bus_time: dict) -> bool:
     return COASTAL_ROUTE_KEYWORD.lower() in text.lower()
 
 
-def find_boarding_point(points: list[dict], name: str) -> dict | None:
-    for p in points:
-        if p.get("home_pickup_zone_name") == name or p.get("boarding_point_name") == name:
-            return p
+def find_boarding_point(points: list[dict], name: str | list[str]) -> dict | None:
+    """Matches by exact name. `name` may be a single string, or an ORDERED list of
+    preferred names to try in priority order — returns the first one that's actually
+    available on this specific bus, not just list()[0] regardless of availability.
+    Some route variants (a different operator/bus_stage config) drop the usual default
+    point entirely — e.g. some Hà Tĩnh→Hà Nội buses have no "Số 275 Nguyễn Trãi" at all,
+    only "BX YÊN NGHĨA" — so a single hardcoded preference can get permanently stuck
+    retrying the exact same doomed candidate every camp cycle. A priority list lets the
+    next-best preference take over on those buses instead of failing outright."""
+    names = [name] if isinstance(name, str) else name
+    for n in names:
+        for p in points:
+            if p.get("home_pickup_zone_name") == n or p.get("boarding_point_name") == n:
+                return p
     return None
 
 

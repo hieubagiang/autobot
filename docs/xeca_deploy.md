@@ -171,6 +171,22 @@ theo sở thích thường lệ. Một chuyến ngoài khung/loại này sẽ b�
 hữu ích khi bạn thà chờ tiếp còn hơn nhận nhầm 1 chuyến giờ không mong muốn (vd chuyến sáng
 sớm) chỉ vì nó tình cờ còn chỗ trước. Không set thì không giới hạn gì (hành vi cũ).
 
+### Điểm đón/trả ưu tiên theo danh sách (`/setpickup`, `/setdropoff`)
+`/setpickup`/`/setdropoff <id> <tên 1>, <tên 2>, ...` giờ nhận **danh sách theo thứ tự ưu
+tiên** (phân tách bởi dấu phẩy), không chỉ 1 tên như trước — `find_boarding_point()` thử
+từng tên theo thứ tự, dùng tên đầu tiên thực sự có trên chuyến đó. `DIRECTIONS`'s
+`default_dropoff_name` cho HT-HN cũng đã có sẵn fallback: `["Số 275 Nguyễn Trãi", "BX YÊN
+NGHĨA"]`.
+
+**Vì sao cần**: một số chuyến (operator/bus_stage khác) không có điểm trả mặc định
+("Số 275 Nguyễn Trãi") — confirmed live 2026-08-10, `bus_time_id 18251` chỉ có "BX YÊN
+NGHĨA" trong danh sách điểm trả. Trước đây `find_best_available_bus()` không biết chuyện
+này, cứ chọn lại đúng chuyến 18251 mỗi vòng camp (vì nó xếp hạng cao nhất) rồi thất bại lặp
+lại ở bước resolve điểm trả — item bị "kẹt" nhiều vòng cho tới khi chuyến đó tình cờ hết
+sạch chỗ và một chuyến khác (có điểm trả hợp lệ) mới được thử. Danh sách ưu tiên giải quyết
+tận gốc: ngay lần đầu gặp chuyến thiếu điểm trả mặc định, tự rớt xuống lựa chọn tiếp theo
+thay vì thất bại.
+
 Lưu ý: mỗi chu kỳ chỉ tạo 1 đơn chưa thanh toán (không tốn tiền cho tới khi bạn tự thanh
 toán), nhưng vẫn là hành động thật trên hệ thống Văn Minh (chiếm ghế tạm thời, tạo bản ghi
 đơn hàng) — tắt instant khi không cần nữa để tránh giữ ghế không cần thiết.

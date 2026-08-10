@@ -148,9 +148,9 @@ def format_item(item: dict, live: dict | None = None) -> str:
 
     line = header
     if item.get("pickup_name"):
-        line += f"\n  Đón: {item['pickup_name']}"
+        line += f"\n  Đón: {format_priority_names(item['pickup_name'])}"
     if item.get("dropoff_name"):
-        line += f"\n  Trả: {item['dropoff_name']}"
+        line += f"\n  Trả: {format_priority_names(item['dropoff_name'])}"
     if item.get("depart_from") and item.get("depart_to"):
         bus_label = "thường" if item.get("bus_type", "ca_hai") == "thuong" else "cả 2 loại"
         line += f"\n  Khởi hành: {item['depart_from']}-{item['depart_to']} ({bus_label})"
@@ -161,6 +161,15 @@ def format_item(item: dict, live: dict | None = None) -> str:
             icon = "✅ Đã mở bán" if live.get("open") else "🔒 Chưa mở"
             line += f"\n  {icon}: {live.get('reason', '')}"
     return line
+
+
+def format_priority_names(value) -> str:
+    """item['pickup_name']/['dropoff_name'] is an ordered priority list (see
+    xeca_auto_book.resolve_points) — a single not-yet-migrated old string is also
+    accepted, shown as-is."""
+    if isinstance(value, list):
+        return " > ".join(value)
+    return value
 
 
 def parse_time_input(value: str) -> str | None:
@@ -451,24 +460,26 @@ class Bot:
     def cmd_setpickup(self, rest: str) -> str:
         parts = rest.split(maxsplit=1)
         if len(parts) < 2:
-            return "Cú pháp: /setpickup <id> <tên điểm đón>"
-        item_id, name = parts
+            return "Cú pháp: /setpickup <id> <tên điểm đón 1>, <tên điểm đón 2>, ... (theo thứ tự ưu tiên)"
+        item_id, names_str = parts
         item = get_item(item_id, self.state_file)
         if not item:
             return f"Không tìm thấy id={item_id}"
-        update_item(item_id, path=self.state_file, pickup_name=name)
-        return f"✅ Đã set điểm đón cho [{item_id}]: {name}"
+        names = [n.strip() for n in names_str.split(",") if n.strip()]
+        update_item(item_id, path=self.state_file, pickup_name=names)
+        return f"✅ Đã set điểm đón ưu tiên cho [{item_id}]: {' > '.join(names)} (thử theo thứ tự, dùng cái đầu tiên có sẵn trên chuyến)"
 
     def cmd_setdropoff(self, rest: str) -> str:
         parts = rest.split(maxsplit=1)
         if len(parts) < 2:
-            return "Cú pháp: /setdropoff <id> <tên điểm trả>"
-        item_id, name = parts
+            return "Cú pháp: /setdropoff <id> <tên điểm trả 1>, <tên điểm trả 2>, ... (theo thứ tự ưu tiên)"
+        item_id, names_str = parts
         item = get_item(item_id, self.state_file)
         if not item:
             return f"Không tìm thấy id={item_id}"
-        update_item(item_id, path=self.state_file, dropoff_name=name)
-        return f"✅ Đã set điểm trả cho [{item_id}]: {name}"
+        names = [n.strip() for n in names_str.split(",") if n.strip()]
+        update_item(item_id, path=self.state_file, dropoff_name=names)
+        return f"✅ Đã set điểm trả ưu tiên cho [{item_id}]: {' > '.join(names)} (thử theo thứ tự, dùng cái đầu tiên có sẵn trên chuyến)"
 
     def cmd_setdeparttime(self, rest: str) -> str:
         parts = rest.split()

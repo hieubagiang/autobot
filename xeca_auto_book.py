@@ -80,8 +80,19 @@ def format_point_names(points: list[dict]) -> str:
     return ", ".join(n for n in names if n) or "(không có điểm nào)"
 
 
+def _matched_point_name(point: dict) -> str:
+    return point.get("home_pickup_zone_name") or point.get("boarding_point_name")
+
+
 def resolve_points(client: XecaClient, bus_time: dict, depart_date: int, direction: dict,
-                    pickup_override: str | None, dropoff_override: str | None) -> tuple[dict, dict, str, str]:
+                    pickup_override: str | list[str] | None,
+                    dropoff_override: str | list[str] | None) -> tuple[dict, dict, str, str]:
+    """`pickup_override`/`dropoff_override` (and the direction's default_*/coastal_* below)
+    are each an ORDERED list of preferred point names (a single string is also accepted,
+    treated as a 1-item list) — find_boarding_point() tries them in order and returns
+    the first one actually available on THIS bus, so a route variant missing the usual
+    top preference (see DIRECTIONS' "BX YÊN NGHĨA" comment) falls through to the next
+    preference instead of failing outright."""
     bus_time_id = bus_time["id"]
     pickup_points = client.get_boarding_points(bus_time_id, depart_date, point_type=1)
     dropoff_points = client.get_boarding_points(bus_time_id, depart_date, point_type=2)
@@ -89,40 +100,42 @@ def resolve_points(client: XecaClient, bus_time: dict, depart_date: int, directi
     coastal = is_coastal_route(bus_time)
 
     if pickup_override:
-        pickup_name = pickup_override
+        pickup_names = pickup_override
     elif coastal and direction.get("coastal_pickup_name"):
-        pickup_name = direction["coastal_pickup_name"]
+        pickup_names = direction["coastal_pickup_name"]
     else:
-        pickup_name = direction.get("default_pickup_name")
-    if not pickup_name:
+        pickup_names = direction.get("default_pickup_name")
+    if not pickup_names:
         raise RuntimeError(
             f"Chưa cấu hình điểm đón cho chiều '{direction['label']}'. "
-            f"Dùng --pickup-name (hoặc /setpickup <id> <tên>)."
+            f"Dùng --pickup-name (hoặc /setpickup <id> <tên1>, <tên2>, ...)."
         )
-    pickup = find_boarding_point(pickup_points, pickup_name)
+    pickup = find_boarding_point(pickup_points, pickup_names)
     if not pickup:
         raise RuntimeError(
-            f"Không tìm thấy điểm đón '{pickup_name}' cho chuyến {bus_time_id}. "
+            f"Không tìm thấy điểm đón nào trong {pickup_names} cho chuyến {bus_time_id}. "
             f"Điểm đón khả dụng: {format_point_names(pickup_points)}"
         )
+    pickup_name = _matched_point_name(pickup)
 
     if dropoff_override:
-        dropoff_name = dropoff_override
+        dropoff_names = dropoff_override
     elif coastal and direction.get("coastal_dropoff_name"):
-        dropoff_name = direction["coastal_dropoff_name"]
+        dropoff_names = direction["coastal_dropoff_name"]
     else:
-        dropoff_name = direction.get("default_dropoff_name")
-    if not dropoff_name:
+        dropoff_names = direction.get("default_dropoff_name")
+    if not dropoff_names:
         raise RuntimeError(
             f"Chưa cấu hình điểm trả cho chiều '{direction['label']}'. "
-            f"Dùng --dropoff-name (hoặc /setdropoff <id> <tên>)."
+            f"Dùng --dropoff-name (hoặc /setdropoff <id> <tên1>, <tên2>, ...)."
         )
-    dropoff = find_boarding_point(dropoff_points, dropoff_name)
+    dropoff = find_boarding_point(dropoff_points, dropoff_names)
     if not dropoff:
         raise RuntimeError(
-            f"Không tìm thấy điểm trả '{dropoff_name}' cho chuyến {bus_time_id}. "
+            f"Không tìm thấy điểm trả nào trong {dropoff_names} cho chuyến {bus_time_id}. "
             f"Điểm trả khả dụng: {format_point_names(dropoff_points)}"
         )
+    dropoff_name = _matched_point_name(dropoff)
 
     return pickup, dropoff, pickup_name, dropoff_name
 

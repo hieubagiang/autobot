@@ -67,6 +67,20 @@ Returns `data.buxTimeExt` (bus/trip detail) and `data.seatMap`, plus the key fie
 
 `xeca_client.is_sale_open(special_rules, depart_date, bus_stage_id)` implements this check.
 
+**Not reliable as a hard gate on real booking attempts (confirmed live 2026-08-10).** For
+at least one holiday-flagged event, `busStageSpecialRules` reported `not_allow_book: 1`
+(`book_msg: "Vé thuộc dịp lễ. Thời gian thanh toán trong vòng 60 phút..."`) as what turned
+out to be a purely informational payment-policy banner — the real site's own "click to
+select a seat" flow went through and booked successfully the entire time this flag was
+set. `xeca_auto_book.find_best_available_bus()` used to treat `is_sale_open()` as a hard
+gate before ever attempting `select_seats()`, so the bot refused to even try a real,
+bookable seat for a couple of minutes around the actual opening — a manual purchase was
+needed instead. Fixed: every candidate's seatMap is now tried via `select_seats()`
+unconditionally first; `is_sale_open()` is only consulted afterward (when nothing yields a
+seat) to pick `SaleNotOpenError` vs `NoSeatsAvailableError` for retry-pacing/messaging —
+it no longer prevents a real attempt. Treat this rule's flags as advisory, not
+authoritative, anywhere a real API action follows.
+
 ## Seat map (`data.seatMap`)
 `objArea[]` — one entry per floor, `areaName` e.g. `"Tầng 1"`, `"Tầng 2"`. Each area has
 `objRow[].objSeat[]` with:
