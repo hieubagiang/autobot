@@ -39,7 +39,7 @@ from datetime import datetime, timedelta
 
 import requests
 
-from xeca_client import DIRECTIONS, get_direction, load_env_file, send_telegram_message
+from xeca_client import DIRECTIONS, get_direction, load_env_file, resolve_target_time, send_telegram_message
 from xeca_control import (
     add_ticket_request,
     get_logs,
@@ -111,7 +111,7 @@ def format_item(item: dict, live: dict | None = None) -> str:
     if item.get("instant"):
         header += " ⚡"
     if item.get("target_time"):
-        header += f" ⏱{item['target_time']}"
+        header += f" ⏱{format_target_time_display(item['target_time'])}"
 
     booking = item.get("booking")
     if booking:
@@ -157,6 +157,18 @@ def parse_time_input(value: str) -> str | None:
     return value
 
 
+def format_target_time_display(value: str) -> str:
+    """item['target_time'] is stored as an absolute 'YYYY-MM-DD HH:MM:SS' (see
+    xeca_client.resolve_target_time) — shown here as a short 'dd/mm HH:MM' for buttons/
+    headers instead of the full timestamp. Falls back to the raw value for any
+    not-yet-migrated old bare "HH:MM" entries."""
+    try:
+        dt = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return value
+    return dt.strftime("%d/%m %H:%M")
+
+
 def item_keyboard(item: dict) -> dict:
     item_id = item["id"]
     instant_btn = (
@@ -166,7 +178,7 @@ def item_keyboard(item: dict) -> dict:
     )
     target_time = item.get("target_time")
     settime_btn = {
-        "text": f"⏱ Đổi giờ ({target_time})" if target_time else "⏱ Đặt giờ mở bán",
+        "text": f"⏱ Đổi giờ ({format_target_time_display(target_time)})" if target_time else "⏱ Đặt giờ mở bán",
         "callback_data": f"settime:{item_id}",
     }
     rows = [
@@ -266,7 +278,7 @@ class Bot:
                     return
                 self.pending_time_request = None
                 try:
-                    reply = self.set_instant(item_id, True, target_time=target_time)
+                    reply = self.set_instant(item_id, True, target_time=resolve_target_time(target_time))
                 except Exception as e:
                     traceback.print_exc()
                     reply = f"❌ Lỗi: {e}"
@@ -548,7 +560,7 @@ class Bot:
             "item_id": item_id,
             "expires_at": datetime.now() + timedelta(seconds=SETTIME_TTL_SECONDS),
         }
-        current = f" (đang đặt: {item['target_time']})" if item.get("target_time") else ""
+        current = f" (đang đặt: {format_target_time_display(item['target_time'])})" if item.get("target_time") else ""
         return (
             f"🕐 Nhập giờ dự kiến mở bán cho [{item_id}]{current}, định dạng HH:MM hoặc HH:MM:SS "
             f"(vd 08:00), có hiệu lực {SETTIME_TTL_SECONDS}s. Gõ /cancel để huỷ."
@@ -572,7 +584,11 @@ class Bot:
                 return "Chỉ dùng [HH:MM] khi bật (on), vd: /instant <id> on 08:00"
             if not parse_time_input(parts[2]):
                 return "Giờ không hợp lệ, dùng định dạng HH:MM hoặc HH:MM:SS (0-23h/0-59p), vd: /instant <id> on 08:00"
-            target_time = parts[2]
+            # Resolved to a concrete absolute datetime right now, not stored as the bare
+            # "HH:MM" — see xeca_client.resolve_target_time()'s docstring (2026-08-10
+            # incident: re-parsing a bare "HH:MM" after a service restart past that time
+            # silently rolled the target to tomorrow, abandoning real active seat holds).
+            target_time = resolve_target_time(parts[2])
         return self.set_instant(item_id, action == "on", target_time=target_time)
 
     def set_instant(self, item_id: str, enable: bool, target_time: str | None = None) -> str:

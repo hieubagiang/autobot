@@ -19,7 +19,7 @@ from xeca_client import (
     is_in_tight_window,
     is_sale_open,
     next_poll_interval,
-    parse_target_time,
+    parse_stored_target_time,
     select_preferred_bus_time,
 )
 from xeca_state import DEFAULT_STATE_FILE, add_item, get_item, list_items, remove_item, update_item
@@ -195,16 +195,19 @@ def instant_lock_loop(item_id: str, stop_event, notify,
         # Optional /instant <id> on <HH:MM> — if the user knows the announced opening
         # time, tighten the SaleNotOpenError retry cadence way down around it (see
         # xeca_client.next_poll_interval) instead of waiting the full
-        # INSTANT_RETRY_NOT_OPEN_SECONDS each cycle. Only re-parse when the stored
-        # target_time string actually changes (so it can be set/changed live via a fresh
-        # /instant on <HH:MM>) — NOT on every iteration: parse_target_time() resolves to
-        # "the next occurrence from now", so re-parsing the SAME string every loop would
-        # make the target silently jump to tomorrow the instant "now" ticks past it,
-        # collapsing TIGHT_WINDOW_AFTER_SECONDS to ~0 right when it matters most.
+        # INSTANT_RETRY_NOT_OPEN_SECONDS each cycle. item["target_time"] is stored as an
+        # ALREADY-RESOLVED absolute datetime (xeca_client.resolve_target_time(), set once
+        # by the Telegram bot at /instant on <HH:MM> time) — parse_stored_target_time() just
+        # reads that fixed instant back, so re-parsing it on every iteration (including
+        # after an xeca-bot.service restart, which wipes this thread's local cache) always
+        # yields the SAME timestamp. This replaced re-parsing the bare "HH:MM" fresh each
+        # time (incident 2026-08-10): a restart after the target had already passed re-
+        # resolved "next occurrence of 08:00" to tomorrow, silently abandoning several
+        # already-expired real seat holds for a day before anyone noticed.
         raw_target_time = item.get("target_time")
         if raw_target_time != target_time_str:
             target_time_str = raw_target_time
-            target_ts = parse_target_time(raw_target_time) if raw_target_time else None
+            target_ts = parse_stored_target_time(raw_target_time) if raw_target_time else None
         tight_now = is_in_tight_window(target_ts)
         if tight_now and not was_tight:
             _safe_notify(f"⏱️ [instant {item_id}] Vào khung giờ gần target-time ({item['target_time']}) — chuyển sang poll dồn dập.")

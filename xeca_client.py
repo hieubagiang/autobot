@@ -26,7 +26,9 @@ TIGHT_WINDOW_AFTER_SECONDS = 120  # give up hammering this long after target if 
 
 def parse_target_time(value: str) -> float:
     """Parses 'HH:MM' or 'HH:MM:SS' (server-local time) as the next occurrence of that
-    time from now, returned as a Unix timestamp. See next_poll_interval()."""
+    time from now, returned as a Unix timestamp. Only safe to call once, right when the
+    user sets the schedule — see resolve_target_time()/parse_stored_target_time() for why
+    this must NOT be re-called later against the same stored string."""
     parts = [int(p) for p in value.split(":")]
     while len(parts) < 3:
         parts.append(0)
@@ -35,6 +37,48 @@ def parse_target_time(value: str) -> float:
     if target <= now:
         target += datetime.timedelta(days=1)
     return target.timestamp()
+
+
+STORED_TARGET_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def resolve_target_time(value: str) -> str:
+    """Resolves a user-typed 'HH:MM'/'HH:MM:SS' into a CONCRETE absolute
+    'YYYY-MM-DD HH:MM:SS' string, to be persisted (e.g. item["target_time"]) instead of
+    the bare input. This must happen exactly once, at set-time — incident 2026-08-10:
+    instant_lock_loop used to call parse_target_time() fresh on every loop iteration
+    against the stored bare "HH:MM", relying on in-memory caching (only re-parse when the
+    string changes) to keep the resolved timestamp stable. That cache is thread-local and
+    does NOT survive an xeca-bot.service restart — resume_instant_items() spins up a brand
+    new thread with no memory of the earlier resolution, so it re-parses "08:00" fresh. If
+    the restart happens after 08:00 has already passed today (exactly what happened: a
+    deploy restarted the service at 08:14, after several items' seat holds had already been
+    created), "next occurrence of 08:00" silently rolls to TOMORROW — instant mode then
+    treats an active event as "scheduled a day out" and stops trying entirely, abandoning
+    real, already-expired seat holds for however long the mistaken 24h wait would have
+    lasted (until someone notices and manually intervenes, as happened here). Storing the
+    already-resolved absolute datetime instead makes re-parsing on any subsequent restart,
+    at any later wall-clock time, always return the exact same original instant — for good
+    or bad (see parse_stored_target_time's docstring on why letting `target_time` itself be
+    a stale absolute instant is fine and even correct)."""
+    ts = parse_target_time(value)
+    return datetime.datetime.fromtimestamp(ts).strftime(STORED_TARGET_TIME_FORMAT)
+
+
+def parse_stored_target_time(value: str) -> float:
+    """Parses a persisted item["target_time"] value back into a Unix timestamp. Expects
+    the absolute format written by resolve_target_time(); falls back to treating `value`
+    as a bare HH:MM (the old, pre-2026-08-10-fix format, reintroducing the exact
+    "silently rolls to tomorrow" ambiguity this function exists to avoid) only for
+    resilience against already-persisted old-format state, never for new writes.
+    A resolved value that's already hours or days in the past is NOT re-rolled forward —
+    it just means the tight window has long since passed, so is_in_tight_window() and
+    next_poll_interval() correctly fall through to normal-cadence camping instead of the
+    old failure mode of quietly deferring for a full extra day."""
+    try:
+        return datetime.datetime.strptime(value, STORED_TARGET_TIME_FORMAT).timestamp()
+    except ValueError:
+        return parse_target_time(value)
 
 
 def is_in_tight_window(target_ts: float | None) -> bool:
