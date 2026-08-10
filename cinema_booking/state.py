@@ -14,8 +14,10 @@ def _load(path: str) -> dict:
 
 
 def _save(data: dict, path: str) -> None:
-    with open(path, "w", encoding="utf-8") as f:
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
 
 
 def add_ticket_request(provider: str, movie_query: str, date_range: list[str],
