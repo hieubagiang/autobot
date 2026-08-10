@@ -142,9 +142,106 @@ def test_beta_provider_placeholder_methods_raise_not_implemented():
 
     provider = BetaProvider()
     showtime = None
+    # get_seat_map is implemented as of Task 13 (see the parse_seat_map tests below) and
+    # is exercised separately; only the still-unimplemented Task 14/15 methods remain here.
     with pytest.raises(NotImplementedError):
         provider.is_logged_in()
     with pytest.raises(NotImplementedError):
-        provider.get_seat_map(showtime)
-    with pytest.raises(NotImplementedError):
         provider.lock_seats(showtime, [])
+
+
+@pytest.fixture
+def beta_seat_map_html():
+    return (FIXTURES / "beta_seat_map.html").read_text(encoding="utf-8")
+
+
+def test_parse_seat_map_excludes_walkway_and_broken_cells(beta_seat_map_html):
+    from cinema_booking.providers.beta import parse_seat_map
+
+    seat_map = parse_seat_map(beta_seat_map_html)
+    all_labels = {s.label for row in seat_map.seats_by_row.values() for s in row}
+    # A15/A14/C15/L11 are seat-for-way walkway placeholders; "Lối vào" is a seat-broken
+    # entrance marker. None of these are real bookable seats, so none should appear.
+    assert all_labels == {"A1", "A2", "A3", "A4", "C1", "C2", "L1", "L2"}
+
+
+def test_parse_seat_map_maps_all_confirmed_status_classes(beta_seat_map_html):
+    from cinema_booking.providers.beta import parse_seat_map
+    from cinema_booking.types import SeatStatus
+
+    seat_map = parse_seat_map(beta_seat_map_html)
+    by_label = {s.label: s for row in seat_map.seats_by_row.values() for s in row}
+    assert by_label["A1"].status == SeatStatus.AVAILABLE  # seat-empty
+    # seat-select means someone -- possibly the logged-in user themselves -- is actively
+    # mid-click on this seat right now. It is not free to grab, so we treat it as HELD
+    # rather than AVAILABLE (there is no SELECTING value in the shared SeatStatus enum).
+    assert by_label["A2"].status == SeatStatus.HELD  # seat-select
+    assert by_label["A3"].status == SeatStatus.HELD  # seat-hold (constructed, from source)
+    assert by_label["A4"].status == SeatStatus.SOLD  # seat-sold (constructed, from source)
+
+
+def test_parse_seat_map_maps_zone_classes(beta_seat_map_html):
+    from cinema_booking.providers.beta import parse_seat_map
+    from cinema_booking.types import SeatZone
+
+    seat_map = parse_seat_map(beta_seat_map_html)
+    by_label = {s.label: s for row in seat_map.seats_by_row.values() for s in row}
+    assert by_label["A1"].zone == SeatZone.STANDARD  # seat-normal
+    assert by_label["C1"].zone == SeatZone.VIP  # seat-vip
+    assert by_label["L1"].zone == SeatZone.SWEETBOX  # seat-double
+
+
+def test_parse_seat_map_uses_seat_index_as_id_and_reads_name_attr_not_merged_text(beta_seat_map_html):
+    from cinema_booking.providers.beta import parse_seat_map
+
+    seat_map = parse_seat_map(beta_seat_map_html)
+    by_label = {s.label: s for row in seat_map.seats_by_row.values() for s in row}
+    # data-seat-index is the opaque id needed to call the real lock endpoint -- distinct
+    # from the printed seat number, which lands in Seat.col instead.
+    assert by_label["A1"].id == "4"
+    assert by_label["A1"].col == 1
+    assert by_label["A1"].price == 50000
+    # L2's onclick JSON / textContent renders the merged "L1 - L2" label for the double
+    # seat pair, but data-seat-name is still the plain "L2" -- parse_seat_map must read
+    # the attribute, not get_text(), to avoid picking up the merged text.
+    assert by_label["L2"].id == "189"
+    assert by_label["L2"].label == "L2"
+
+
+def test_parse_seat_map_rows_are_in_front_to_back_screen_order(beta_seat_map_html):
+    from cinema_booking.providers.beta import parse_seat_map
+
+    seat_map = parse_seat_map(beta_seat_map_html)
+    # data-seat-row is numeric and front-to-back: A=0, C=2, L=11. The row *letters* are
+    # not contiguous (no B or D in this fixture), so this only coincidentally matches
+    # alphabetical order -- the parser must sort by the numeric row, not the letter.
+    assert seat_map.rows == ["A", "C", "L"]
+
+
+def test_parse_seat_map_orders_seats_within_row_by_seat_index_left_to_right(beta_seat_map_html):
+    from cinema_booking.providers.beta import parse_seat_map
+
+    seat_map = parse_seat_map(beta_seat_map_html)
+    # Within row A, the walkway cells A15/A14 (index 1/2, excluded) have index moving
+    # opposite to their printed name, but the real seats A1..A4 (index 4,5,6,7) increase
+    # in the same order as their printed number -- so ordering the *real* seats by index
+    # yields correct physical left-to-right order.
+    assert [s.label for s in seat_map.seats_by_row["A"]] == ["A1", "A2", "A3", "A4"]
+    assert [s.label for s in seat_map.seats_by_row["C"]] == ["C1", "C2"]
+    assert [s.label for s in seat_map.seats_by_row["L"]] == ["L1", "L2"]
+
+
+def test_parse_seat_map_finds_exactly_the_eight_real_seats_with_expected_statuses(beta_seat_map_html):
+    from cinema_booking.providers.beta import parse_seat_map
+    from cinema_booking.types import SeatStatus
+
+    seat_map = parse_seat_map(beta_seat_map_html)
+    all_seats = [s for row in seat_map.seats_by_row.values() for s in row]
+    # 8 real seat-used cells in the fixture (5 non-seat placeholders excluded). Only 3 of
+    # the 4 confirmed status classes are distinct SeatStatus values here, since both
+    # seat-select and seat-hold map to HELD.
+    assert len(all_seats) == 8
+    statuses_seen = {s.status for s in all_seats}
+    assert SeatStatus.AVAILABLE in statuses_seen
+    assert SeatStatus.SOLD in statuses_seen
+    assert SeatStatus.HELD in statuses_seen
