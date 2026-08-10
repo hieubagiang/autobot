@@ -120,9 +120,20 @@ def instant_camp_loop(item_id: str, stop_event, notify, state_file: str = DEFAUL
                     update_item(item_id, path=state_file, status="pending_payment",
                                 hold_expiry=result.hold_expiry, payment_url=result.payment_url,
                                 seat_labels=seat_labels, instant=False)
-                    notify(f"[{item_id}] Đã giữ ghế: {', '.join(seat_labels)} — "
-                           f"hạn giữ chỗ: {result.hold_expiry}. Link: {result.payment_url}")
+                    # locked=True is set (and the state above is persisted) BEFORE the
+                    # notify call below, and that call's own exception is swallowed here
+                    # rather than left to the outer except (finding N1) -- otherwise a
+                    # transient notify failure (e.g. a Telegram API hiccup) right after a
+                    # real successful lock would fall into the outer `except Exception`
+                    # handler and let the `while` loop go around again, attempting a
+                    # SECOND lock on an item that already holds real seats.
                     locked = True
+                    try:
+                        notify(f"[{item_id}] Đã giữ ghế: {', '.join(seat_labels)} — "
+                               f"hạn giữ chỗ: {result.hold_expiry}. Link: {result.payment_url}")
+                    except Exception as notify_error:
+                        print(f"[{item_id}] notify() failed after a successful lock "
+                              f"(seats are held regardless): {notify_error}")
                     break
             if locked:
                 return

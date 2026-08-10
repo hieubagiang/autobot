@@ -1,5 +1,6 @@
 import json
 import re
+import threading
 from datetime import datetime, timedelta
 from typing import Callable
 
@@ -24,6 +25,12 @@ RETURN_SEAT_PATH = "/Ajax.aspx/ReturnSeat"
 # This is therefore a documented ESTIMATE for LockResult.hold_expiry, not a
 # server-confirmed guarantee.
 HOLD_MINUTES = 10
+
+# home.htm cache TTL (finding N2). I4's original cache had no expiry at all, so a film
+# that appears on the homepage after the bot process started was never discovered for
+# the rest of that process's life. 5 minutes balances the original goal (don't hit a
+# Cloudflare-fronted page on every single poll) against staleness.
+HOME_HTML_CACHE_TTL = timedelta(minutes=5)
 
 # Shared by SelectSeat (lock) and ReturnSeat (release) -- identical payload shape
 # ({"aData": [seatIndex, showId, customerId]}, three strings) and identical response
@@ -124,6 +131,10 @@ def parse_seat_map(html: str) -> SeatMap:
         seat_index = int(cell.get("data-seat-index") or 0)
         row_number = int(cell.get("data-seat-row") or 0)
         price = int(cell.get("data-seat-price") or 0)
+        # Present only on the kept (second) half of a seat-double couple-seat pair
+        # (finding N4) -- the wire id of its partner cell, needed so lock_seats can lock
+        # BOTH halves of the one physical two-person seat, not just this cell's own id.
+        relation_index = cell.get("data-relation-seat-index")
 
         status = next((v for k, v in STATUS_BY_CLASS.items() if k in classes), DEFAULT_STATUS)
         zone = next((v for k, v in ZONE_BY_CLASS.items() if k in classes), DEFAULT_ZONE)
@@ -134,7 +145,7 @@ def parse_seat_map(html: str) -> SeatMap:
         col = int(seat_number_match.group(1)) if seat_number_match else 0
 
         seat = Seat(id=str(seat_index), label=name, row=row_letter, col=col,
-                    zone=zone, price=price, status=status)
+                    zone=zone, price=price, status=status, partner_id=relation_index)
 
         row_letters.setdefault(row_number, row_letter)
         seats_by_row_number.setdefault(row_number, []).append(seat)
@@ -200,12 +211,22 @@ class BetaProvider(CinemaProvider):
         self._context = None
         self._page_obj = None
 
-        # Cache of home.htm's raw HTML (finding I4). list_cinemas() and _find_film_id()
-        # (called from list_showtimes()) each independently used to do a fresh GET
-        # home.htm -- meaning a single camp-loop iteration could fetch it 2+ times
-        # against a Cloudflare-fronted site. Simplicity over cleverness for this wave:
-        # cache until explicitly invalidated (no TTL), not per-call.
+        # Cache of home.htm's raw HTML (finding I4, TTL added for finding N2). Without a
+        # TTL, list_cinemas()/_find_film_id() would only ever fetch home.htm once per
+        # process lifetime -- a film that appears on the homepage after the bot started
+        # would never be discovered. See HOME_HTML_CACHE_TTL.
         self._home_html_cache: str | None = None
+        self._home_html_cache_time: datetime | None = None
+
+        # Guards every method that drives self._page() (finding N3). get_provider()
+        # caches one BetaProvider instance per process (finding I5), so two concurrent
+        # /instant camp-loop threads for the same provider now share this one instance
+        # -- and Playwright's sync API is bound to the thread that created it, so
+        # unsynchronized cross-thread use of the same page can raise or interleave
+        # navigation/state (thread A's goto landing mid-way through thread B reading
+        # page.content()). Serializing access trades concurrency for correctness, which
+        # is the only option with a single underlying browser page.
+        self._lock = threading.Lock()
 
     def _page(self):
         if self._page_obj is None:
@@ -217,28 +238,30 @@ class BetaProvider(CinemaProvider):
         return self._page_obj
 
     def is_logged_in(self) -> bool:
-        page = self._page()
-        page.goto(HOME_URL)
-        return _page_shows_logged_in(page.content())
+        with self._lock:
+            page = self._page()
+            page.goto(HOME_URL)
+            return _page_shows_logged_in(page.content())
 
     def login_via_facebook(self) -> bool:
-        page = self._page()
-        page.goto("https://betacinemas.vn/login.htm")
-        page.evaluate("loginByFacebook()")
-        popup = page.wait_for_event("popup")
-        try:
-            continue_button = popup.get_by_role(
-                "button", name=re.compile(r"^Tiếp tục dưới tên")
-            )
-            continue_button.wait_for(timeout=15000)
-        except Exception:
-            self.notify(
-                "[beta] Facebook không hiện màn hình 'Tiếp tục' như mong đợi — "
-                "có thể cần đăng nhập lại tay hoặc xác minh thêm."
-            )
-            return False
-        continue_button.click()
-        return True
+        with self._lock:
+            page = self._page()
+            page.goto("https://betacinemas.vn/login.htm")
+            page.evaluate("loginByFacebook()")
+            popup = page.wait_for_event("popup")
+            try:
+                continue_button = popup.get_by_role(
+                    "button", name=re.compile(r"^Tiếp tục dưới tên")
+                )
+                continue_button.wait_for(timeout=15000)
+            except Exception:
+                self.notify(
+                    "[beta] Facebook không hiện màn hình 'Tiếp tục' như mong đợi — "
+                    "có thể cần đăng nhập lại tay hoặc xác minh thêm."
+                )
+                return False
+            continue_button.click()
+            return True
 
     def get_seat_map(self, showtime: Showtime) -> SeatMap:
         # self._page() is provided by Task 14 (persistent authenticated Playwright
@@ -250,9 +273,10 @@ class BetaProvider(CinemaProvider):
                 "get_seat_map requires a Showtime this same BetaProvider instance "
                 "already returned from list_showtimes()"
             )
-        page = self._page()
-        page.goto(f"{SEAT_MAP_URL}?f={film_session_id}&s={showtime.id}")
-        seat_map = parse_seat_map(page.content())
+        with self._lock:
+            page = self._page()
+            page.goto(f"{SEAT_MAP_URL}?f={film_session_id}&s={showtime.id}")
+            seat_map = parse_seat_map(page.content())
 
         total_seats = sum(len(seats) for seats in seat_map.seats_by_row.values())
         if total_seats == 0:
@@ -275,11 +299,16 @@ class BetaProvider(CinemaProvider):
 
         Beta has no bulk-lock API -- confirmed live in Task 12's spike that selecting 2
         seats fired 2 separate SelectSeat requests -- so this calls SelectSeat once per
-        seat, sequentially, in order. If any individual call fails (network error, or a
-        response with IsYourSeat:false meaning someone else grabbed that seat in the
-        meantime), every seat already locked in this same attempt is released via
-        ReturnSeat before returning failure, to avoid leaving an orphaned partial hold.
-        Only returns LockResult(success=True, ...) if every seat in the block locked.
+        WIRE INDEX, sequentially, in order. A couple-seat (Seat.partner_id set, finding
+        N4) is one physical two-person seat but needs 2 SelectSeat calls -- one for
+        seat.id, one for seat.partner_id -- since the site tracks each half's wire index
+        independently; both must succeed for that Seat to count as locked. If any
+        individual call fails (network error, or a response with IsYourSeat:false meaning
+        someone else grabbed that index in the meantime), every index already locked in
+        this same attempt -- including any already-locked half of the CURRENT seat -- is
+        released via ReturnSeat before returning failure, to avoid leaving an orphaned
+        partial hold. Only returns LockResult(success=True, ...) if every seat in the
+        block fully locked (both halves, for a couple-seat).
         """
         film_session_id = self._film_session_ids.get(showtime.id)
         if film_session_id is None:
@@ -288,25 +317,40 @@ class BetaProvider(CinemaProvider):
                 "lock_seats requires a Showtime this same BetaProvider instance "
                 "already returned from list_showtimes()"
             )
-        page = self._page()
-        page.goto(f"{SEAT_MAP_URL}?f={film_session_id}&s={showtime.id}")
-        # customerId is the logged-in customer's own GUID -- NOT per-seat and not
-        # derivable from anything already in our types. It exists only as a JS global
-        # (`var customerId = '...';`) on this page, so it must be read live.
-        customer_id = page.evaluate("customerId")
+        with self._lock:
+            page = self._page()
+            page.goto(f"{SEAT_MAP_URL}?f={film_session_id}&s={showtime.id}")
+            # customerId is the logged-in customer's own GUID -- NOT per-seat and not
+            # derivable from anything already in our types. It exists only as a JS global
+            # (`var customerId = '...';`) on this page, so it must be read live.
+            customer_id = page.evaluate("customerId")
 
-        locked: list[Seat] = []
-        for seat in seats:
-            try:
-                response = self._call_seat_endpoint(page, SELECT_SEAT_PATH, seat.id,
-                                                     showtime.id, customer_id)
-                success, error = parse_lock_response(response)
-            except Exception as exc:
-                success, error = False, f"SelectSeat request failed: {exc}"
-            if not success:
-                self._release_seats(page, locked, showtime.id, customer_id)
-                return LockResult(success=False, error=f"failed to lock seat {seat.label}: {error}")
-            locked.append(seat)
+            locked_indexes: list[tuple[str, str]] = []  # (seat_index, display label)
+            for seat in seats:
+                indexes = [(seat.id, seat.label)]
+                if seat.partner_id:
+                    indexes.append((seat.partner_id, f"{seat.label} (nửa ghế đôi)"))
+
+                newly_locked: list[tuple[str, str]] = []
+                failure: str | None = None
+                for seat_index, label in indexes:
+                    try:
+                        response = self._call_seat_endpoint(page, SELECT_SEAT_PATH, seat_index,
+                                                             showtime.id, customer_id)
+                        success, error = parse_lock_response(response)
+                    except Exception as exc:
+                        success, error = False, f"SelectSeat request failed: {exc}"
+                    if not success:
+                        failure = error
+                        break
+                    newly_locked.append((seat_index, label))
+
+                if failure is not None:
+                    self._release_indexes(page, newly_locked + locked_indexes,
+                                           showtime.id, customer_id)
+                    return LockResult(success=False,
+                                       error=f"failed to lock seat {seat.label}: {failure}")
+                locked_indexes.extend(newly_locked)
 
         hold_expiry = (datetime.now() + timedelta(minutes=HOLD_MINUTES)).isoformat()
         # payment_url: the seat-selection page URL itself, since that's the page the
@@ -319,36 +363,44 @@ class BetaProvider(CinemaProvider):
                              customer_id: str) -> dict:
         return page.evaluate(_SEAT_ENDPOINT_SCRIPT, [path, seat_index, show_id, customer_id])
 
-    def _release_seats(self, page, seats: list[Seat], show_id: str, customer_id: str) -> None:
-        """Best-effort rollback: call ReturnSeat for every already-locked seat.
+    def _release_indexes(self, page, indexes: list[tuple[str, str]], show_id: str,
+                          customer_id: str) -> None:
+        """Best-effort rollback: call ReturnSeat for every already-locked wire index.
 
         This is the cleanup path for a partial-lock failure, so it never raises -- a
         release that fails or comes back unconfirmed is surfaced via notify() (there is
         nothing more automatic that can be done about it) rather than compounding the
         original failure with a new exception.
         """
-        for seat in seats:
+        for seat_index, label in indexes:
             try:
-                response = self._call_seat_endpoint(page, RETURN_SEAT_PATH, seat.id,
+                response = self._call_seat_endpoint(page, RETURN_SEAT_PATH, seat_index,
                                                      show_id, customer_id)
                 inner = _parse_seat_payload(response)
                 if inner.get("IsYourSeat") is not False:
                     self.notify(
-                        f"[beta] ReturnSeat for seat {seat.label} during lock rollback did "
+                        f"[beta] ReturnSeat for seat {label} during lock rollback did "
                         f"not confirm release (response={inner!r}) -- may be an orphaned "
                         "hold, check manually."
                     )
             except Exception as exc:
                 self.notify(
-                    f"[beta] ReturnSeat request failed for seat {seat.label} during lock "
+                    f"[beta] ReturnSeat request failed for seat {label} during lock "
                     f"rollback -- may be an orphaned hold, check manually: {exc}"
                 )
 
     def _get_home_html(self) -> str:
-        if self._home_html_cache is None:
+        now = datetime.now()
+        is_stale = (
+            self._home_html_cache is None
+            or self._home_html_cache_time is None
+            or now - self._home_html_cache_time > HOME_HTML_CACHE_TTL
+        )
+        if is_stale:
             resp = requests.get(HOME_URL, timeout=15)
             resp.raise_for_status()
             self._home_html_cache = resp.text
+            self._home_html_cache_time = now
         return self._home_html_cache
 
     def list_cinemas(self) -> list[Cinema]:

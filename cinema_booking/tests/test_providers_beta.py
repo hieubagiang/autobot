@@ -301,6 +301,20 @@ def test_parse_seat_map_merges_double_seat_pair_into_one_seat(beta_seat_map_html
     assert double_seats[0].id == "189"
 
 
+def test_parse_seat_map_captures_partner_id_for_double_seat(beta_seat_map_html):
+    # Regression test for finding N4: the merged couple-seat Seat only carried its own
+    # (second-half) wire id, so lock_seats could only lock half of the physical
+    # two-person seat. data-relation-seat-index (already in the DOM on the kept L2 cell)
+    # must be captured as Seat.partner_id so the other half can also be locked.
+    from cinema_booking.providers.beta import parse_seat_map
+
+    seat_map = parse_seat_map(beta_seat_map_html)
+    by_label = {s.label: s for row in seat_map.seats_by_row.values() for s in row}
+    assert by_label["L2"].partner_id == "188"
+    assert by_label["A1"].partner_id is None
+    assert by_label["C1"].partner_id is None
+
+
 class _FakePage:
     """Minimal stand-in for a Playwright Page, for get_seat_map tests."""
 
@@ -666,6 +680,75 @@ def test_lock_seats_rolls_back_on_network_error_during_select_seat(monkeypatch):
     ]
 
 
+def test_lock_seats_locks_both_halves_of_a_couple_seat(monkeypatch):
+    # Regression test for finding N4: a couple-seat (partner_id set) is one physical
+    # two-person seat but the site tracks each half's wire index independently -- both
+    # must be locked via separate SelectSeat calls for the seat to be genuinely held.
+    from cinema_booking.providers.beta import BetaProvider, SELECT_SEAT_PATH
+    from cinema_booking.types import Cinema, Seat, SeatStatus, SeatZone, Showtime
+
+    cinema = Cinema(id="381f745f-c110-4d0c-9117-3a79f36ba9c4", name="Beta Tây Sơn",
+                     city="", provider="beta")
+    showtime = Showtime(id="show-1", movie="Người Nhện: Khởi Đầu Mới", cinema=cinema,
+                         start_time="08:10", date="2026-08-13")
+    couple_seat = Seat(id="189", label="L2", row="L", col=2, zone=SeatZone.SWEETBOX,
+                        price=50000, status=SeatStatus.AVAILABLE, partner_id="188")
+
+    provider = BetaProvider()
+    provider._film_session_ids[showtime.id] = "fsid-1"
+    fake_page = _FakeLockPage(
+        customer_id="cust-guid-1",
+        responses=[_select_seat_response(189, True), _select_seat_response(188, True)],
+    )
+    monkeypatch.setattr(provider, "_page", lambda: fake_page, raising=False)
+
+    result = provider.lock_seats(showtime, [couple_seat])
+
+    assert result.success is True
+    calls = [arg for _script, arg in fake_page.evaluate_calls]
+    assert calls == [
+        [SELECT_SEAT_PATH, "189", "show-1", "cust-guid-1"],
+        [SELECT_SEAT_PATH, "188", "show-1", "cust-guid-1"],
+    ]
+
+
+def test_lock_seats_rolls_back_both_halves_when_partner_half_fails(monkeypatch):
+    # If the SECOND half of a couple-seat fails to lock, the FIRST half (already locked
+    # in this same attempt) must be released too -- otherwise it's an orphaned partial
+    # hold on half of a seat nobody can actually sit in as a pair.
+    from cinema_booking.providers.beta import BetaProvider, RETURN_SEAT_PATH, SELECT_SEAT_PATH
+    from cinema_booking.types import Cinema, Seat, SeatStatus, SeatZone, Showtime
+
+    cinema = Cinema(id="381f745f-c110-4d0c-9117-3a79f36ba9c4", name="Beta Tây Sơn",
+                     city="", provider="beta")
+    showtime = Showtime(id="show-1", movie="Người Nhện: Khởi Đầu Mới", cinema=cinema,
+                         start_time="08:10", date="2026-08-13")
+    couple_seat = Seat(id="189", label="L2", row="L", col=2, zone=SeatZone.SWEETBOX,
+                        price=50000, status=SeatStatus.AVAILABLE, partner_id="188")
+
+    provider = BetaProvider()
+    provider._film_session_ids[showtime.id] = "fsid-1"
+    fake_page = _FakeLockPage(
+        customer_id="cust-guid-1",
+        responses=[
+            _select_seat_response(189, True),   # first half locks fine
+            _select_seat_response(188, False),  # partner half fails
+            _select_seat_response(189, False),  # rollback of first half confirms release
+        ],
+    )
+    monkeypatch.setattr(provider, "_page", lambda: fake_page, raising=False)
+
+    result = provider.lock_seats(showtime, [couple_seat])
+
+    assert result.success is False
+    calls = [arg for _script, arg in fake_page.evaluate_calls]
+    assert calls == [
+        [SELECT_SEAT_PATH, "189", "show-1", "cust-guid-1"],
+        [SELECT_SEAT_PATH, "188", "show-1", "cust-guid-1"],
+        [RETURN_SEAT_PATH, "189", "show-1", "cust-guid-1"],
+    ]
+
+
 def test_lock_seats_raises_value_error_when_film_session_id_unknown():
     # Same contract as get_seat_map: a Showtime that never went through this provider
     # instance's list_showtimes() has no known film_session_id -- lock_seats must fail
@@ -709,6 +792,78 @@ def test_home_html_is_cached_across_list_cinemas_and_find_film_id_calls(beta_hom
     provider.list_cinemas()
 
     assert call_count["n"] == 1
+
+
+def test_home_html_cache_refetches_after_ttl_expires(beta_home_html, monkeypatch):
+    # Regression test for finding N2: I4's cache had no TTL at all, so a film appearing
+    # on the homepage after the bot process started was never discovered for the rest of
+    # that process's life. Simulate elapsed time by backdating the cache timestamp
+    # directly, rather than sleeping for real, to keep the test fast.
+    from datetime import timedelta
+
+    from cinema_booking.providers.beta import BetaProvider, HOME_HTML_CACHE_TTL
+
+    call_count = {"n": 0}
+
+    def counting_get(url, **kwargs):
+        call_count["n"] += 1
+        return type("R", (), {"text": beta_home_html, "raise_for_status": lambda self: None})()
+
+    monkeypatch.setattr("cinema_booking.providers.beta.requests.get", counting_get)
+    provider = BetaProvider()
+
+    provider.list_cinemas()
+    assert call_count["n"] == 1
+
+    provider._home_html_cache_time -= (HOME_HTML_CACHE_TTL + timedelta(seconds=1))
+    provider.list_cinemas()
+
+    assert call_count["n"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Finding N3: concurrent /instant items share one BetaProvider's single Playwright page
+# ---------------------------------------------------------------------------
+
+
+def test_page_lock_serializes_concurrent_page_using_calls(monkeypatch):
+    # Regression test for finding N3: I5's provider-instance cache means two concurrent
+    # /instant camp-loop threads for the same provider now share one BetaProvider's
+    # single Playwright page. Without a lock around page()-using methods, both threads'
+    # goto/content calls could interleave. This proves the lock actually excludes
+    # concurrent entry, using a fake page whose content() sleeps briefly so overlapping
+    # calls would be caught red-handed.
+    import threading
+    import time
+
+    from cinema_booking.providers.beta import BetaProvider
+
+    provider = BetaProvider()
+    state_lock = threading.Lock()
+    state = {"concurrent": 0, "max_concurrent": 0}
+
+    class SlowPage:
+        def goto(self, url):
+            pass
+
+        def content(self):
+            with state_lock:
+                state["concurrent"] += 1
+                state["max_concurrent"] = max(state["max_concurrent"], state["concurrent"])
+            time.sleep(0.05)
+            with state_lock:
+                state["concurrent"] -= 1
+            return "Xin chào: Test User"
+
+    monkeypatch.setattr(provider, "_page", lambda: SlowPage(), raising=False)
+
+    threads = [threading.Thread(target=provider.is_logged_in) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert state["max_concurrent"] == 1
 
 
 # ---------------------------------------------------------------------------

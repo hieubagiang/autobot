@@ -41,6 +41,10 @@ class Seat:
     zone: SeatZone
     price: int
     status: SeatStatus
+    # Wire id of this seat's OTHER half, for a physical two-person seat that a provider
+    # merges into a single Seat (e.g. Beta's "sweetheart" pair). None for every ordinary
+    # seat. Providers that have no such concept never set this.
+    partner_id: str | None = None
 
 
 @dataclass(frozen=True)

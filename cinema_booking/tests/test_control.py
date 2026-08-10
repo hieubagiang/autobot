@@ -209,6 +209,44 @@ def test_camp_loop_clears_instant_flag_on_successful_lock(tmp_path, monkeypatch)
     assert updated["instant"] is False
 
 
+def test_camp_loop_does_not_relock_when_success_notify_raises(tmp_path, monkeypatch):
+    # Regression test for finding N1: if notify() raises right after a successful lock
+    # (e.g. a transient Telegram API error), the loop must still treat the lock as done
+    # and return -- not fall into the outer except-and-retry path, which would attempt a
+    # SECOND lock_seats call on an item that already holds real seats.
+    state_file = str(tmp_path / "state.json")
+    item = add_ticket_request(provider="beta", movie_query="Người Nhện",
+                               date_range=["2026-08-10", "2026-08-10"],
+                               cinema_priority=["Beta Tây Sơn"], state_file=state_file)
+    cinema = Cinema(id="c1", name="Beta Tây Sơn", city="Hà Nội", provider="beta")
+    showtime = Showtime(id="s1", movie="Người Nhện", cinema=cinema, start_time="09:00", date="2026-08-10")
+    seat_map = SeatMap(rows=["A"], seats_by_row={"A": [make_seat("A1"), make_seat("A2")]})
+    lock_result = LockResult(success=True, hold_expiry="2026-08-10T09:05:00", payment_url="http://pay")
+    provider = FakeProvider(cinemas=[cinema], showtimes=[showtime], seat_maps=[seat_map],
+                             lock_result=lock_result, logged_in=True)
+    monkeypatch.setattr("cinema_booking.control.get_provider", lambda name: provider)
+
+    stop_event = threading.Event()
+    call_count = {"n": 0}
+
+    def flaky_notify(message):
+        # Safety valve: if a regression reintroduces the bug, this bounds the loop to a
+        # few iterations instead of spinning forever, so a regression fails fast rather
+        # than hanging the test suite.
+        call_count["n"] += 1
+        if call_count["n"] >= 3:
+            stop_event.set()
+        raise RuntimeError("simulated Telegram send failure")
+
+    instant_camp_loop(item["id"], stop_event, flaky_notify, state_file=state_file,
+                       poll_interval_seconds=0)
+
+    assert len(provider.lock_seats_calls) == 1
+    updated = get_item(item["id"], state_file)
+    assert updated["status"] == "pending_payment"
+    assert updated["instant"] is False
+
+
 def test_get_provider_returns_cached_instance_on_repeated_calls():
     # Regression test for finding I5: two concurrent /instant camps for the same
     # provider must share ONE BetaProvider instance (and therefore one Playwright
