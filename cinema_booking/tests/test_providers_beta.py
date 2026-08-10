@@ -137,6 +137,38 @@ def test_list_showtimes_returns_empty_when_movie_not_found(beta_home_html, monke
     assert showtimes == []
 
 
+def test_list_showtimes_records_film_session_id_per_show_id_for_get_seat_map(
+    beta_home_html, beta_showtimes_json, monkeypatch,
+):
+    # get_seat_map needs the "f" URL param, which is the film_session_id captured from
+    # bookingSeat(...) -- a DIFFERENT guid than either showtime.id ("s") or
+    # cinema.id. list_showtimes is the only place this value is available, so it must
+    # stash it (keyed by show_id) for get_seat_map to look up later.
+    from cinema_booking.providers.beta import BetaProvider
+    from cinema_booking.types import Cinema
+
+    def fake_get(url, **kwargs):
+        return type("R", (), {"text": beta_home_html, "raise_for_status": lambda self: None})()
+
+    def fake_post(url, **kwargs):
+        return type("R", (), {"json": lambda self: beta_showtimes_json, "raise_for_status": lambda self: None})()
+
+    monkeypatch.setattr("cinema_booking.providers.beta.requests.get", fake_get)
+    monkeypatch.setattr("cinema_booking.providers.beta.requests.post", fake_post)
+
+    provider = BetaProvider()
+    cinema = Cinema(id="381f745f-c110-4d0c-9117-3a79f36ba9c4", name="Beta Tây Sơn",
+                     city="", provider="beta")
+    showtimes = provider.list_showtimes(cinema, movie_query="Người Nhện",
+                                         date_range=("2026-08-11", "2026-08-11"))
+    assert len(showtimes) == 3
+    # All 3 fixture showtimes share one film_session_id (a single film session's tab).
+    for showtime in showtimes:
+        assert provider._film_session_ids[showtime.id] == "842328a0-c4e3-4e1f-8597-20d35312d126"
+    # And it must NOT be confused with the cinema (theater) guid used to call it.
+    assert provider._film_session_ids[showtimes[0].id] != cinema.id
+
+
 def test_beta_provider_placeholder_methods_raise_not_implemented():
     from cinema_booking.providers.beta import BetaProvider
 
@@ -218,14 +250,14 @@ def test_parse_seat_map_rows_are_in_front_to_back_screen_order(beta_seat_map_htm
     assert seat_map.rows == ["A", "C", "L"]
 
 
-def test_parse_seat_map_orders_seats_within_row_by_seat_index_left_to_right(beta_seat_map_html):
+def test_parse_seat_map_orders_seats_within_row_by_dom_order_left_to_right(beta_seat_map_html):
     from cinema_booking.providers.beta import parse_seat_map
 
     seat_map = parse_seat_map(beta_seat_map_html)
-    # Within row A, the walkway cells A15/A14 (index 1/2, excluded) have index moving
-    # opposite to their printed name, but the real seats A1..A4 (index 4,5,6,7) increase
-    # in the same order as their printed number -- so ordering the *real* seats by index
-    # yields correct physical left-to-right order.
+    # Seats are kept in DOM order (the order they appear in the fixture's markup), which
+    # is the site's actual visual left-to-right layout -- NOT sorted by data-seat-index,
+    # which is not a reliable position signal (see parse_seat_map's docstring: row C's
+    # own walkway cell C15 has a lower index than C1/C2 despite appearing after them).
     assert [s.label for s in seat_map.seats_by_row["A"]] == ["A1", "A2", "A3", "A4"]
     assert [s.label for s in seat_map.seats_by_row["C"]] == ["C1", "C2"]
     assert [s.label for s in seat_map.seats_by_row["L"]] == ["L1", "L2"]
@@ -245,3 +277,70 @@ def test_parse_seat_map_finds_exactly_the_eight_real_seats_with_expected_statuse
     assert SeatStatus.AVAILABLE in statuses_seen
     assert SeatStatus.SOLD in statuses_seen
     assert SeatStatus.HELD in statuses_seen
+
+
+class _FakePage:
+    """Minimal stand-in for a Playwright Page, for get_seat_map tests."""
+
+    def __init__(self, content_html: str):
+        self._content_html = content_html
+        self.goto_calls: list[str] = []
+
+    def goto(self, url: str):
+        self.goto_calls.append(url)
+
+    def content(self) -> str:
+        return self._content_html
+
+
+def test_get_seat_map_builds_url_with_film_session_id_not_cinema_id(
+    beta_home_html, beta_showtimes_json, beta_seat_map_html, monkeypatch,
+):
+    # Regression test for a bug where get_seat_map used showtime.cinema.id (the theater
+    # guid) as the "f" URL param instead of the film_session_id (a different guid,
+    # captured from list_showtimes' own bookingSeat(...) parsing).
+    from cinema_booking.providers.beta import BetaProvider, SEAT_MAP_URL
+    from cinema_booking.types import Cinema
+
+    def fake_get(url, **kwargs):
+        return type("R", (), {"text": beta_home_html, "raise_for_status": lambda self: None})()
+
+    def fake_post(url, **kwargs):
+        return type("R", (), {"json": lambda self: beta_showtimes_json, "raise_for_status": lambda self: None})()
+
+    monkeypatch.setattr("cinema_booking.providers.beta.requests.get", fake_get)
+    monkeypatch.setattr("cinema_booking.providers.beta.requests.post", fake_post)
+
+    provider = BetaProvider()
+    cinema = Cinema(id="381f745f-c110-4d0c-9117-3a79f36ba9c4", name="Beta Tây Sơn",
+                     city="", provider="beta")
+    showtimes = provider.list_showtimes(cinema, movie_query="Người Nhện",
+                                         date_range=("2026-08-11", "2026-08-11"))
+    showtime = showtimes[0]
+
+    fake_page = _FakePage(beta_seat_map_html)
+    monkeypatch.setattr(provider, "_page", lambda: fake_page, raising=False)
+
+    seat_map = provider.get_seat_map(showtime)
+
+    expected_url = f"{SEAT_MAP_URL}?f=842328a0-c4e3-4e1f-8597-20d35312d126&s={showtime.id}"
+    assert fake_page.goto_calls == [expected_url]
+    assert cinema.id not in fake_page.goto_calls[0]
+    assert seat_map.rows == ["A", "C", "L"]  # sanity: parse_seat_map really ran
+
+
+def test_get_seat_map_raises_value_error_when_film_session_id_unknown():
+    # A Showtime that never went through this provider instance's list_showtimes() has
+    # no known film_session_id -- get_seat_map must fail loudly rather than silently
+    # building a URL with the wrong guid.
+    from cinema_booking.providers.beta import BetaProvider
+    from cinema_booking.types import Cinema, Showtime
+
+    provider = BetaProvider()
+    cinema = Cinema(id="381f745f-c110-4d0c-9117-3a79f36ba9c4", name="Beta Tây Sơn",
+                     city="", provider="beta")
+    showtime = Showtime(id="unknown-show-id", movie="Some Movie", cinema=cinema,
+                         start_time="08:10", date="2026-08-11")
+
+    with pytest.raises(ValueError):
+        provider.get_seat_map(showtime)

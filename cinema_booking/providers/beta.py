@@ -56,16 +56,22 @@ def parse_seat_map(html: str) -> SeatMap:
     """Parse a Beta chon-ghe.htm seat grid fragment into the shared SeatMap type.
 
     Row ordering (SeatMap.rows) follows the numeric data-seat-row attribute (lower =
-    closer to the screen), since the row *letters* are not contiguous. Within a row,
-    seats are ordered by data-seat-index ascending, which increases in lockstep with the
-    printed seat number for real seats in the fixture (unlike the excluded seat-for-way
-    walkway cells, where index and printed number move in opposite directions) -- so
-    sorting by index yields correct physical left-to-right order.
+    closer to the screen), since the row *letters* are not contiguous.
+
+    Within a row, seats are kept in DOM order (the order soup.select(...) naturally
+    yields), NOT sorted by data-seat-index: the page's authors lay seat-cell divs out in
+    visual left-to-right order, which is the actual structural guarantee we have. Sorting
+    by data-seat-index would be unjustified -- it is not documented to be a monotonic
+    position signal, and in fact isn't one even within this fixture: row C's DOM order is
+    C1 (index 38), C2 (index 39), then the walkway cell C15 (index 35) -- C15 comes AFTER
+    C1/C2 in the DOM despite having a LOWER index than both, so index does not
+    monotonically track DOM/visual position once non-seat cells are considered. DOM order
+    has no such counter-example and needs no assumption about what the index field means.
     """
     soup = BeautifulSoup(html, "html.parser")
 
     row_letters: dict[int, str] = {}
-    seats_by_row_number: dict[int, list[tuple[int, Seat]]] = {}
+    seats_by_row_number: dict[int, list[Seat]] = {}
 
     for cell in soup.select(".seat-cell"):
         classes = set(cell.get("class", []))
@@ -91,13 +97,10 @@ def parse_seat_map(html: str) -> SeatMap:
                     zone=zone, price=price, status=status)
 
         row_letters.setdefault(row_number, row_letter)
-        seats_by_row_number.setdefault(row_number, []).append((seat_index, seat))
+        seats_by_row_number.setdefault(row_number, []).append(seat)
 
     rows = [row_letters[n] for n in sorted(seats_by_row_number)]
-    seats_by_row = {
-        row_letters[n]: [seat for _, seat in sorted(seats_by_row_number[n], key=lambda t: t[0])]
-        for n in seats_by_row_number
-    }
+    seats_by_row = {row_letters[n]: seats_by_row_number[n] for n in seats_by_row_number}
     return SeatMap(rows=rows, seats_by_row=seats_by_row)
 
 
@@ -109,14 +112,30 @@ class BetaProvider(CinemaProvider):
     implemented in later tasks.
     """
 
+    def __init__(self):
+        # showtime.id (the "s" URL param) -> film_session_id (the "f" URL param), a
+        # DIFFERENT guid than either showtime.id or showtime.cinema.id. Populated as a
+        # side effect of list_showtimes, since that's the only place this value is
+        # available (parsed from bookingSeat(...) and otherwise discarded). Task 14 will
+        # add more state to __init__ (profile_dir, notify, Playwright handles, etc.) --
+        # merge into this same __init__ rather than adding a second one.
+        self._film_session_ids: dict[str, str] = {}
+
     def is_logged_in(self) -> bool:
         raise NotImplementedError  # Task 14
 
     def get_seat_map(self, showtime: Showtime) -> SeatMap:
         # self._page() is provided by Task 14 (persistent authenticated Playwright
         # context) -- this method only works once that lands.
+        film_session_id = self._film_session_ids.get(showtime.id)
+        if film_session_id is None:
+            raise ValueError(
+                f"no film_session_id known for showtime {showtime.id!r} -- "
+                "get_seat_map requires a Showtime this same BetaProvider instance "
+                "already returned from list_showtimes()"
+            )
         page = self._page()
-        page.goto(f"{SEAT_MAP_URL}?f={showtime.cinema.id}&s={showtime.id}")
+        page.goto(f"{SEAT_MAP_URL}?f={film_session_id}&s={showtime.id}")
         return parse_seat_map(page.content())
 
     def lock_seats(self, showtime, seats):
@@ -156,7 +175,8 @@ class BetaProvider(CinemaProvider):
 
         start, end = date_range
         showtimes = []
-        for _cinema_name, _film_session_id, show_id, hhmm, ddmmyyyy in BOOKING_SEAT_RE.findall(html):
+        for _cinema_name, film_session_id, show_id, hhmm, ddmmyyyy in BOOKING_SEAT_RE.findall(html):
+            self._film_session_ids[show_id] = film_session_id
             iso_date = datetime.strptime(ddmmyyyy, "%d/%m/%Y").date().isoformat()
             if start <= iso_date <= end:
                 showtimes.append(Showtime(id=show_id, movie=film_name, cinema=cinema,
