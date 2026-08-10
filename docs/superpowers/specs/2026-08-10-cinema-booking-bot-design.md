@@ -140,9 +140,15 @@ và `total_cols` cột (theo từng hàng):
 
 ## Ưu tiên ngày & ưu tiên rạp
 
-- **Ưu tiên ngày**: khi một mục watchlist cho một khoảng ngày (không phải 1 buổi chiếu cố định),
-  các ngày rơi vào **Thứ Hai** hoặc **Thứ Tư** được xếp hạng cao nhất (giá vé 2D thường rẻ nhất ở
-  các ngày này), các ngày khác là phương án dự phòng theo thứ tự ngày gần nhất.
+- **Ngày mục tiêu — hỗ trợ cả 2 kiểu**: `/add` nhận một ngày đơn (vd `12/08/2026`) HOẶC một khoảng
+  ngày (vd `10/08/2026-20/08/2026`). Ngày đơn được coi là khoảng ngày chỉ gồm 1 ngày — không áp
+  ưu tiên Thứ Hai/Thứ Tư vì không có gì để xếp hạng (đây là trường hợp "tôi biết chắc muốn xem
+  ngày nào rồi"). Với khoảng ngày thật (nhiều hơn 1 ngày), các ngày rơi vào **Thứ Hai** hoặc
+  **Thứ Tư** được xếp hạng cao nhất (giá vé 2D thường rẻ nhất ở các ngày này), các ngày khác là
+  phương án dự phòng theo thứ tự ngày gần nhất. Cả 2 kiểu dùng chung một trường `date_range` trong
+  `state.py` (`[ngày, ngày]` khi là ngày đơn) — `find_best_showtime()` không cần biết đang xử lý
+  kiểu nào, chỉ xếp hạng danh sách ngày nó nhận được (danh sách 1 phần tử thì xếp hạng cũng chỉ ra
+  đúng 1 kết quả).
 - **Ưu tiên rạp**: danh sách rạp có thứ tự ưu tiên, mặc định:
   1. CGV Vincom Royal City
   2. CGV Indochina Plaza Hà Nội
@@ -171,7 +177,9 @@ và `total_cols` cột (theo từng hàng):
 
 Theo đúng khuôn mẫu đã có ở `xeca_telegram_bot.py`, có provider ở đầu mỗi lệnh cần chọn rạp:
 
-- `/add cgv <tên phim> <khoảng ngày>` — thêm mục watchlist mới (mặc định quantity=2, không sweetbox).
+- `/add cgv <tên phim> <ngày đơn hoặc khoảng ngày>` — thêm mục watchlist mới (mặc định quantity=2,
+  không sweetbox). Vd `/add cgv "Người Nhện" 12/08/2026` (1 ngày cụ thể) hoặc
+  `/add cgv "Người Nhện" 10/08/2026-20/08/2026` (khoảng ngày, bot tự xếp hạng theo ưu tiên Thứ 2/Thứ 4).
 - `/setquantity <id> <n>`
 - `/setsweetbox <id> on|off`
 - `/setcinemapriority <id> <rạp 1>, <rạp 2>, ...` (theo thứ tự ưu tiên, giống `/setpickup` của xeca)
