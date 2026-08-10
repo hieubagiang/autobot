@@ -116,14 +116,73 @@ provider chưa cần tới, tránh over-engineering.
   cùng nguyên tắc như CGV — không tự động xử lý các bước đó.
 - Sơ đồ ghế có **5 trạng thái** (nhiều hơn CGV): "Ghế trống", "Ghế đang chọn", "Ghế đang giữ" (đang
   bị giữ tạm — bởi ai đó, có thể là do một khách khác đang giữ ghế cùng lúc), "Ghế đã bán", "Ghế đặt
-  trước". Chưa lấy được cấu trúc DOM/attribute chi tiết của từng ghế (zone/giá/id) — để ở Phase viết
-  `providers/beta.py`.
-- **Chưa xác nhận** (khác với CGV, nơi đã đo được chính xác 5 phút): endpoint giữ ghế thật, thời hạn
-  giữ ghế, và luật ràng buộc khi chọn ghế (Beta có luật kiểu "không chừa 1 ghế trống lẻ" giống
-  `checkleftright` của CGV không?) — chưa test tới bước đó, để lại cho Phase viết `providers/beta.py`.
+  trước".
 - Session cũng rớt khá thường xuyên trong lúc research (phải đăng nhập lại nhiều lần) — giống CGV,
   cần `is_logged_in()` kiểm tra chủ động và xử lý mất session một cách bình thường, không giả định
   session sống lâu.
+
+### Addendum 2026-08-10 (Task 12 — live spike, đã xác nhận)
+
+Nghiên cứu trực tiếp trên một suất chiếu ít khách (Beta Tây Sơn, "Người Nhện: Khởi Đầu Mới",
+08:10 13/08/2026 — 2 ngày sau, sáng sớm, ~171/213 ghế trống lúc kiểm tra), đã giữ + nhả 2 ghế
+thật (A1, A2) để xác nhận toàn bộ luồng rồi giải phóng lại ngay, seat map xác nhận đã trở về
+`seat-empty` — không để lại ảnh hưởng.
+
+- **Cấu trúc DOM ghế**: mỗi ghế là `<div class="seat-cell {trạng_thái} {loại}">` với các
+  `data-seat-*` attribute (`data-seat-name` vd `"A1"`, `data-seat-index` — số thứ tự toàn cục dùng
+  để gọi API, KHÔNG phải số ghế in trên ghế, `data-seat-row` — số hàng 0-based, `data-seat-price`,
+  `data-seat-type` — `seat-normal`/`seat-vip`/`seat-double`, `data-seat-type-id` guid) và một
+  `onclick="SeatOnclick({...json...}, this)"` chứa toàn bộ metadata ghế (giá, loại vé, v.v.).
+  `seat-double` là ghế đôi ("sweetheart") — tương đương SWEETBOX; 2 seat-cell (`data-seat-index`
+  liền nhau, liên kết qua `SeatIndexRelation`) tạo thành 1 ghế đôi vật lý, ô thứ 2 hiển thị nhãn
+  gộp `"L1 - L2"`.
+- **Ghế không phải ghế thật** (loại trừ khi parse, giống "Q88" của CGV):
+  `StatusClass:"seat-for-way"` (khoảng trống/lối đi giữa các ghế) và `StatusClass:"seat-broken"`
+  (ví dụ nhãn `"Lối vào"` = lối vào, không phải ghế) — cả hai có `SeatSoldStatus:0` và không phải
+  ghế có thể đặt. Ghế thật có `StatusClass:"seat-used"`.
+- **5 class trạng thái ghế thật** (xác nhận bằng cách đọc trực tiếp JS của trang, hàm xử lý
+  callback SignalR broadcast trạng thái ghế — không phải đoán): `seat-empty` (trống — xác nhận
+  sống bằng ghế thật A1/C1/L1...), `seat-select` (đang chọn bởi chính mình — xác nhận sống bằng
+  cách tự chọn 1 ghế và quan sát class đổi), `seat-hold` (đang giữ — ứng với
+  `SEAT_SALE_STATUS.WAITINGPAY` trong code, **chưa có ví dụ sống** vì suất test không có ghế nào ở
+  trạng thái này, chỉ xác nhận qua đọc source), `seat-sold` (đã bán — ứng với
+  `SEAT_SALE_STATUS.BOOKED` hoặc cao hơn, **chưa có ví dụ sống**, chỉ xác nhận qua đọc source).
+  "Ghế đặt trước" (đặt-trước) chưa xác nhận được tên class tương ứng — không thấy nhánh xử lý riêng
+  trong đoạn JS đã đọc, có thể trùng với `seat-sold` hoặc là một trạng thái hiếm.
+- **Endpoint giữ ghế thật — đã xác nhận sống**: `POST /Ajax.aspx/SelectSeat`, body
+  `{"aData": ["<seatIndex>", "<showId>", "<customerId>"]}` (3 chuỗi — `seatIndex` là
+  `data-seat-index` dạng string, `showId` là tham số `s` trên URL, `customerId` là GUID khách hàng
+  đang đăng nhập — đọc trực tiếp từ biến JS `customerId` trên trang, KHÔNG phải id riêng của ghế).
+  Response: `{"d": "{\"SeatIndex\":N,\"SeatStatus\":1,\"IsYourSeat\":true}"}` (chuỗi JSON lồng
+  trong JSON, cần parse 2 lần). `IsYourSeat:true` = giữ thành công.
+- **Endpoint nhả ghế — đã xác nhận sống**: `POST /Ajax.aspx/ReturnSeat`, cùng hình dạng payload
+  (`[seatIndex, showId, customerId]`), response `{"d": "{\"SeatIndex\":N,\"SeatStatus\":1,
+  \"IsYourSeat\":false}"}`. Đã dùng để nhả 2 ghế test ngay sau khi xác nhận — xác nhận qua reload
+  seat map rằng ghế trở lại `seat-empty` thật.
+- **Thời hạn giữ ghế — khác hẳn cơ chế của CGV**: không có đồng hồ đếm riêng cho từng ghế đã giữ.
+  Thay vào đó có một đồng hồ đếm ngược **10 phút cho toàn bộ trang `chon-ghe.htm`**
+  (`time_in_minutes = 10`, khởi tạo lại từ đầu mỗi lần hàm `init()`/`countDownTimer()` chạy — tức
+  mỗi lần trang load), hiển thị "Thời gian còn lại". Hết giờ thì `window.location = "/"` (chuyển
+  hướng về trang chủ) — **không thấy gọi `ReturnSeat` tự động khi hết giờ** trong đoạn JS đã đọc,
+  nghĩa là việc nhả ghế khi hết giờ (nếu có) phải do server tự làm ở phía sau, không phải do
+  client chủ động gọi như lúc bấm bỏ chọn. Thời hạn thật của server cho một ghế đã `SelectSeat`
+  (độc lập với đồng hồ hiển thị ở client) **vẫn chưa được đo chính xác** — code đếm ngược có một
+  đoạn dùng `localStorage` để lưu deadline nhưng đã bị comment-out (dead code), nên đồng hồ hiển
+  thị luôn tính lại "bây giờ + 10 phút" mỗi lần hàm chạy, không đáng tin cậy làm cơ sở tính
+  `LockResult.hold_expiry` chính xác — **tạm dùng 10 phút làm giá trị ước lượng** cho
+  `hold_expiry`, cần xác nhận lại bằng một lần đo có kiểm soát riêng nếu cần độ chính xác cao hơn.
+- **Luật ràng buộc chọn ghế kiểu `checkleftright`**: **chưa kiểm chứng** — không có thời gian/rủi ro
+  phù hợp để test trên suất ít khách đã chọn (test này cần chọn 1 ghế đơn lẻ chừa đúng 1 ghế trống
+  cạnh bên rồi xem site có chặn không, rủi ro thao tác nhiều hơn giữ+nhả đơn giản). Hàm
+  `leaves_isolated_gap` đã viết (Task 5) vẫn nên giữ nguyên khi tích hợp — nếu Beta không có luật
+  này, hàm chỉ đơn giản không loại bỏ thêm ứng viên nào, không gây sai.
+- **Phát hiện thêm ngoài phạm vi research ban đầu**: trang dùng **SignalR** (`chooseseathub`,
+  qua `/signalr/negotiate`, `/signalr/start`, `/signalr/send`) để broadcast trạng thái ghế theo
+  thời gian thực giữa các khách đang xem cùng suất chiếu — nghĩa là poll lại `get_seat_map` định kỳ
+  vẫn hoạt động đúng (server luôn trả trạng thái mới nhất), SignalR chỉ là kênh cập nhật UI nhanh
+  hơn cho người dùng thật, không bắt buộc bot phải dùng.
+- Không có `X-Requested-With`/CSRF token riêng ngoài cookie session cho `SelectSeat`/`ReturnSeat` —
+  giống `LoadShowtimesByFilm`, chỉ dựa vào session cookie hiện tại.
 
 ## Kết quả research cơ chế đặt vé CGV (đã research kỹ, tạm hoãn triển khai — xem lý do ở đầu tài liệu)
 
@@ -286,9 +345,13 @@ Phase 3, để dành cho khi cần mở rộng, xem mục research CGV để tá
 
 **Beta Cinemas (provider đang triển khai):**
 
-- Chưa xác nhận cấu trúc DOM/attribute của từng ghế (zone/giá/id), endpoint giữ ghế thật, thời hạn
-  giữ ghế, và luật ràng buộc chọn ghế (nếu có, kiểu `checkleftright` của CGV) — cần làm ở Phase 3
-  khi viết `providers/beta.py`.
+- ~~Chưa xác nhận cấu trúc DOM/attribute của từng ghế, endpoint giữ ghế thật~~ — **đã xác nhận
+  2026-08-10** bằng 1 lần thử thật có kiểm soát (giữ + nhả ngay 2 ghế trên suất ít khách): xem
+  addendum trong mục research Beta ở trên (`SelectSeat`/`ReturnSeat`, cấu trúc `data-seat-*`, 5
+  class trạng thái — 2 trong 5 mới xác nhận qua đọc source, chưa có ví dụ sống). Vẫn còn mở: thời
+  hạn giữ ghế thật ở server (đồng hồ 10 phút chỉ là hiển thị client, không đáng tin cậy 100%), và
+  luật ràng buộc kiểu `checkleftright` (chưa test) — để lại cho khi viết `providers/beta.py` thật
+  (Task 15) nếu cần độ chính xác cao hơn.
 - Chưa xác nhận liệu các endpoint **cần session thật** (không phải endpoint tra cứu công khai) có
   chấp nhận gọi bằng HTTP thô (không qua browser) hay không — an toàn nhất là giả định cần Playwright
   cho tới khi kiểm chứng được, không assume.
