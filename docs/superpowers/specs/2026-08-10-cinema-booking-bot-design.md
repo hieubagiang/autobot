@@ -1,10 +1,15 @@
-# Bot tự động giữ vé xem phim (CGV, mở rộng đa rạp) — Design Spec
+# Bot tự động giữ vé xem phim (Beta Cinemas, mở rộng đa rạp) — Design Spec
 
 ## Bối cảnh & mục tiêu
 
 Xây dựng một bot tương tự `xeca_*` (đang dùng để tự động giữ vé xe khách Văn Minh) nhưng cho việc
-giữ vé xem phim, bắt đầu với CGV, thiết kế đủ trừu tượng để sau này gắn thêm các chuỗi rạp khác
-(BHD, Beta Cinema, Cinestar, Galaxy CineX Hà Nội Centre...) mà không phải viết lại phần lõi.
+giữ vé xem phim, thiết kế đủ trừu tượng để gắn thêm các chuỗi rạp khác (BHD, CGV, Cinestar, Galaxy
+CineX Hà Nội Centre...) mà không phải viết lại phần lõi.
+
+**Provider đầu tiên triển khai: Beta Cinemas**, không phải CGV. Đã research kỹ CGV trước (xem mục
+riêng bên dưới, giữ lại làm tham khảo/tiền đề cho provider CGV sau này), nhưng quyết định bắt đầu
+code với Beta vì đăng nhập đơn giản hơn hẳn (Facebook OAuth, không captcha — xem mục research Beta)
+trong khi CGV có captcha ảnh + WAF F5 + session hay rớt, phù hợp làm provider thứ hai hơn là đầu tiên.
 
 Mục tiêu cụ thể: tự động theo dõi/"camp" một buổi chiếu (phim + rạp + khoảng ngày), và khi có ghế
 phù hợp trống, tự chọn + giữ ghế (không tự thanh toán) theo quy tắc ghế và ưu tiên rạp/ngày do
@@ -42,13 +47,15 @@ cinema_booking/
 ├── telegram_bot.py             # bot Telegram (entry point: python -m cinema_booking.telegram_bot)
 ├── providers/
 │   ├── __init__.py
-│   └── cgv.py                  # implementation cụ thể cho CGV (Playwright)
+│   └── beta.py                  # implementation cụ thể cho Beta Cinemas (provider đầu tiên)
 └── tests/
     ├── test_scoring.py
     ├── test_state.py
     ├── test_control.py
-    └── test_providers_cgv.py
+    └── test_providers_beta.py
 ```
+
+(CGV sẽ là `providers/cgv.py` khi triển khai — để sau, xem mục research CGV bên dưới.)
 
 ### `types.py`
 
@@ -73,13 +80,55 @@ lock_seats(showtime, seats) -> LockResult
 ```
 
 Tất cả các module khác (`scoring.py`, `state.py`, `control.py`, `telegram_bot.py`) chỉ được gọi
-qua interface này — không import bất kỳ thứ gì từ `providers/cgv.py` trực tiếp. Nhờ vậy khi thêm
-BHD/Beta/Cinestar/Galaxy sau này, chỉ cần viết thêm một file `providers/<tên>.py` implement đúng
-interface rồi đăng ký vào registry trong `control.py`, không phải sửa logic chấm điểm/orchestration
-hiện có. (Việc research cơ chế đặt vé của các rạp này để lại cho một phiên làm việc sau — không
-viết code "khống" cho các provider chưa research, tránh over-engineering.)
+qua interface này — không import bất kỳ thứ gì từ `providers/beta.py` (hay `providers/cgv.py` sau
+này) trực tiếp. Nhờ vậy khi thêm BHD/CGV/Cinestar/Galaxy sau này, chỉ cần viết thêm một file
+`providers/<tên>.py` implement đúng interface rồi đăng ký vào registry trong `control.py`, không
+phải sửa logic chấm điểm/orchestration hiện có. CGV đã được research kỹ (xem mục riêng bên dưới)
+nhưng chưa viết code — BHD/Cinestar/Galaxy thì chưa research gì cả. Không viết code "khống" cho
+provider chưa cần tới, tránh over-engineering.
 
-## Kết quả research cơ chế đặt vé CGV (dùng Chrome DevTools MCP, phiên đăng nhập thật của bạn)
+## Kết quả research cơ chế đặt vé Beta Cinemas (provider đầu tiên — dùng Chrome DevTools MCP)
+
+- Nền tảng: ASP.NET WebForms cổ điển (`Ajax.aspx/<TênMethod>`, cookie `ASP.NET_SessionId`,
+  `__AntiXsrfToken`), đứng sau **Cloudflare** (cookie `cf_clearance`) — khác hẳn CGV (F5).
+- **Tra cứu rạp/phim/suất chiếu là API công khai, không cần đăng nhập, và gọi thẳng bằng HTTP
+  thô cũng được** (đã kiểm chứng bằng `curl` trần, không cookie: `POST /Ajax.aspx/LoadShowtimesByFilm`
+  với body `{"aData":["<cinemaId guid>","<filmId guid>","<tên phim>"]}` trả về `{"d": "<html suất
+  chiếu>"}` — HTML nhúng trong JSON, chứa giờ chiếu + số ghế trống + tham số cho từng suất). Test lại
+  với cookie session thật (lấy từ browser đã đăng nhập) cũng ra 200 bình thường — nhưng endpoint này
+  vốn không cần đăng nhập nên chưa chứng minh được liệu một endpoint **cần session thật** (sơ đồ ghế/
+  giữ ghế) có chấp nhận client không phải browser hay không — để lại xác nhận ở Phase khi viết
+  `providers/beta.py`.
+- Chọn rạp trên trang chủ qua `ChooseCinema(cinemaId_guid, tênRạp)` (biến JS toàn cục), chọn phim +
+  mở popup lịch chiếu qua `viewsShowtimes(cinemaId, filmId, tênPhim, tênRạp)`. Bấm vào 1 suất chiếu
+  gọi `bookingSeat(tênRạp, filmSessionId_guid, showId_guid, giờ, ngày, tênPhim, loạiPhòng, ...)`, xây
+  URL `/chon-ghe.htm?f=<filmSessionId>&s=<showId>` rồi trigger một fancybox popup "Đặt vé" (thay vì
+  cần đợi popup, có thể navigate thẳng tới URL này).
+- Trang chọn ghế (`/chon-ghe.htm?...`) **yêu cầu đăng nhập** — chưa đăng nhập thì bị redirect về
+  `/login.htm#login?referer=...`, giống hệt CGV.
+- **Khác biệt lớn nhất so với CGV: form đăng nhập KHÔNG có captcha** — chỉ Email + Mật khẩu, cộng
+  thêm nút "ĐĂNG NHẬP BẰNG FACEBOOK" (`loginByFacebook()`). Với tài khoản Facebook đã từng cho phép
+  app Beta Cinemas trước đó (trường hợp của bạn), luồng Facebook chỉ là: mở popup OAuth của Facebook
+  → Facebook hiện màn hình "Bạn từng đăng nhập bằng Facebook, tiếp tục?" → bấm "Tiếp tục dưới tên
+  <tên>" → popup tự đóng, tab gốc có session Beta ngay. Không có bước xác minh nào (không 2FA, không
+  captcha) trong nhánh happy-path này — nếu Facebook từng hiện bất kỳ thử thách nào khác (2FA, nhập
+  lại mật khẩu vì session Facebook hết hạn, checkpoint bảo mật) thì bot phải dừng và báo người dùng,
+  cùng nguyên tắc như CGV — không tự động xử lý các bước đó.
+- Sơ đồ ghế có **5 trạng thái** (nhiều hơn CGV): "Ghế trống", "Ghế đang chọn", "Ghế đang giữ" (đang
+  bị giữ tạm — bởi ai đó, có thể là do một khách khác đang giữ ghế cùng lúc), "Ghế đã bán", "Ghế đặt
+  trước". Chưa lấy được cấu trúc DOM/attribute chi tiết của từng ghế (zone/giá/id) — để ở Phase viết
+  `providers/beta.py`.
+- **Chưa xác nhận** (khác với CGV, nơi đã đo được chính xác 5 phút): endpoint giữ ghế thật, thời hạn
+  giữ ghế, và luật ràng buộc khi chọn ghế (Beta có luật kiểu "không chừa 1 ghế trống lẻ" giống
+  `checkleftright` của CGV không?) — chưa test tới bước đó, để lại cho Phase viết `providers/beta.py`.
+- Session cũng rớt khá thường xuyên trong lúc research (phải đăng nhập lại nhiều lần) — giống CGV,
+  cần `is_logged_in()` kiểm tra chủ động và xử lý mất session một cách bình thường, không giả định
+  session sống lâu.
+
+## Kết quả research cơ chế đặt vé CGV (đã research kỹ, tạm hoãn triển khai — xem lý do ở đầu tài liệu)
+
+> Giữ lại phần research này làm tham khảo cho `providers/cgv.py` khi tới lúc triển khai — không phải
+> provider đang code hiện tại (xem "Bối cảnh & mục tiêu").
 
 - Đăng nhập tại `/default/customer/account/login/...` yêu cầu captcha ảnh — luôn do người dùng
   tự làm, không tự động hoá.
@@ -166,15 +215,17 @@ và `total_cols` cột (theo từng hàng):
   `state.py` (`[ngày, ngày]` khi là ngày đơn) — `find_best_showtime()` không cần biết đang xử lý
   kiểu nào, chỉ xếp hạng danh sách ngày nó nhận được (danh sách 1 phần tử thì xếp hạng cũng chỉ ra
   đúng 1 kết quả).
-- **Ưu tiên rạp**: danh sách rạp có thứ tự ưu tiên, mặc định:
-  1. CGV Vincom Royal City
-  2. CGV Indochina Plaza Hà Nội
-  3. CGV Vincom Bắc Từ Liêm
-  4. Các rạp CGV còn lại ở Hà Nội (thứ tự bất kỳ)
+- **Ưu tiên rạp**: danh sách rạp có thứ tự ưu tiên. Với Beta Cinemas, mặc định hiện tại chỉ có:
+  1. Beta Tây Sơn (rạp ưu tiên duy nhất được xác nhận cho tới nay)
+  2. Các rạp Beta khác (thứ tự bất kỳ, mở rộng sau nếu cần)
+
+  (Với CGV — để sau — thứ tự ưu tiên đã thống nhất trước đó là Vincom Royal City > Indochina Plaza
+  Hà Nội > Vincom Bắc Từ Liêm > rạp CGV còn lại, giữ nguyên trong tài liệu để dùng lại khi tới lúc.)
 
   Người dùng có thể đổi thứ tự này qua lệnh Telegram (xem phần Watchlist & bot). Có sẵn lệnh in ra
-  toàn bộ danh sách rạp CGV theo thành phố (lấy từ `/default/cinox/site/`) để người dùng chọn/xếp
-  lại trọng số — không hard-code danh sách đầy đủ, luôn lấy trực tiếp từ trang khi cần liệt kê.
+  toàn bộ danh sách rạp theo thành phố (Beta: từ dropdown chọn rạp trên trang chủ; CGV: từ
+  `/default/cinox/site/`) để người dùng chọn/xếp lại trọng số — không hard-code danh sách đầy đủ,
+  luôn lấy trực tiếp từ trang khi cần liệt kê.
 - `find_best_showtime()` trong `control.py` kết hợp hai tiêu chí trên: với mỗi rạp theo đúng thứ tự
   ưu tiên, thử các ngày trong khoảng đã cho, ưu tiên Thứ Hai/Thứ Tư trước — rạp ưu tiên cao hơn luôn
   được thử trước rạp ưu tiên thấp hơn (không trộn lẫn "rạp thấp hơn nhưng ngày đẹp hơn" lên trên
@@ -189,15 +240,18 @@ và `total_cols` cột (theo từng hàng):
   `xeca_telegram_bot.py` xử lý trạng thái `pending_payment` + lệnh `/paid`. Bot **không** tự động
   thanh toán — chỉ gửi link/trang thanh toán để người dùng tự hoàn tất nếu muốn, trong thời hạn giữ
   chỗ — đã đo được thực tế là **5 phút** (xem mục "Kết quả research cơ chế đặt vé CGV" ở trên), rất
-  ngắn nên Telegram phải báo ngay lập tức, gần như không có khoảng trễ chấp nhận được.
+  ngắn (với CGV, xem mục research CGV) — nên Telegram phải báo ngay lập tức. Với Beta Cinemas, thời
+  hạn giữ ghế **chưa được đo** — cần xác nhận khi viết `providers/beta.py` (Phase 3), tạm thiết kế
+  theo hướng báo ngay lập tức giống CGV cho tới khi có số liệu thật.
 
 ## Watchlist & lệnh Telegram (`telegram_bot.py`)
 
 Theo đúng khuôn mẫu đã có ở `xeca_telegram_bot.py`, có provider ở đầu mỗi lệnh cần chọn rạp:
 
-- `/add cgv <tên phim> <ngày đơn hoặc khoảng ngày>` — thêm mục watchlist mới (mặc định quantity=2,
-  không sweetbox). Vd `/add cgv "Người Nhện" 12/08/2026` (1 ngày cụ thể) hoặc
-  `/add cgv "Người Nhện" 10/08/2026-20/08/2026` (khoảng ngày, bot tự xếp hạng theo ưu tiên Thứ 2/Thứ 4).
+- `/add beta <tên phim> <ngày đơn hoặc khoảng ngày>` — thêm mục watchlist mới (mặc định quantity=2,
+  không sweetbox). Vd `/add beta "Người Nhện" 12/08/2026` (1 ngày cụ thể) hoặc
+  `/add beta "Người Nhện" 10/08/2026-20/08/2026` (khoảng ngày, bot tự xếp hạng theo ưu tiên Thứ 2/Thứ 4).
+  (Cú pháp giữ nguyên `<provider> ...` ở đầu để dùng lại cho `cgv` hoặc rạp khác sau này.)
 - `/setquantity <id> <n>`
 - `/setsweetbox <id> on|off`
 - `/setcinemapriority <id> <rạp 1>, <rạp 2>, ...` (theo thứ tự ưu tiên, giống `/setpickup` của xeca)
@@ -213,25 +267,46 @@ Theo đúng khuôn mẫu đã có ở `xeca_telegram_bot.py`, có provider ở �
 2. **State & orchestration** — `state.py`, `control.py`. Test bằng `FakeProvider` (trả về sơ đồ ghế
    giả lập thay đổi qua từng lần poll) — kiểm tra logic camp loop, xếp hạng ngày/rạp, chưa đụng tới
    trình duyệt/CGV thật.
-3. **CGV provider** — `providers/cgv.py`: Playwright + profile bền, phát hiện bị đưa về trang login
-   hoặc gặp trang lạ của WAF → báo người dùng, parse sơ đồ ghế từ DOM, luồng giữ ghế qua `ajaxadd`.
-   Phần parse (DOM → `SeatMap`, JSON response → `LockResult`) được test bằng fixture đã lưu lại từ
-   buổi research hôm nay — CI không gọi CGV thật. Có thêm một smoke-test thủ công (chỉ chạy khi bật
-   cờ môi trường, không tự chạy) để bạn tự kiểm tra với session thật của mình, và để xác nhận thời
-   hạn giữ chỗ còn đang bỏ ngỏ ở trên.
+3. **Beta Cinemas provider** — `providers/beta.py`: phần tra cứu rạp/phim/suất chiếu gọi thẳng API
+   công khai (HTTP thô, không cần Playwright — đã xác nhận hoạt động). Phần đăng nhập (Facebook OAuth
+   continue) và mọi thứ sau đăng nhập (đọc sơ đồ ghế thật, giữ ghế) dùng Playwright + profile bền,
+   phát hiện bị đưa về `/login.htm` hoặc gặp bất kỳ bước xác minh Facebook lạ nào (2FA, checkpoint) →
+   báo người dùng, không tự xử lý. Cần xác nhận trong phase này: cấu trúc DOM/attribute của từng ghế,
+   endpoint giữ ghế thật, thời hạn giữ ghế, và luật ràng buộc chọn ghế (nếu có) — tất cả đang là điểm
+   mở (xem mục research Beta). Phần parse được test bằng fixture lưu lại từ buổi research — CI không
+   gọi Beta thật. Có thêm smoke-test thủ công (chỉ chạy khi bật cờ môi trường) để tự kiểm tra với
+   session thật.
 4. **Telegram bot & nối toàn bộ luồng** — `telegram_bot.py`, theo khuôn mẫu `xeca_telegram_bot.py`.
-   Kiểm tra thủ công đầu-cuối (vì đụng tới tài khoản CGV thật của bạn), không tự động trong CI.
+   Kiểm tra thủ công đầu-cuối (vì đụng tới tài khoản Beta Cinemas thật của bạn), không tự động trong CI.
+
+*(CGV, và các rạp khác, trở thành `providers/cgv.py`/`providers/<tên>.py` bổ sung sau — không phải
+Phase 3, để dành cho khi cần mở rộng, xem mục research CGV để tái sử dụng.)*
 
 ## Rủi ro / điểm còn mở
 
-- ~~Chưa xác nhận thời hạn giữ ghế (hold expiry) thực tế của CGV sau `ajaxadd`~~ — **đã xác nhận
-  2026-08-10** bằng 1 lần thử thật có kiểm soát: đúng 5 phút, client-side, tự nhả qua
+**Beta Cinemas (provider đang triển khai):**
+
+- Chưa xác nhận cấu trúc DOM/attribute của từng ghế (zone/giá/id), endpoint giữ ghế thật, thời hạn
+  giữ ghế, và luật ràng buộc chọn ghế (nếu có, kiểu `checkleftright` của CGV) — cần làm ở Phase 3
+  khi viết `providers/beta.py`.
+- Chưa xác nhận liệu các endpoint **cần session thật** (không phải endpoint tra cứu công khai) có
+  chấp nhận gọi bằng HTTP thô (không qua browser) hay không — an toàn nhất là giả định cần Playwright
+  cho tới khi kiểm chứng được, không assume.
+- Session rớt khá thường xuyên trong lúc research (phải đăng nhập lại Facebook nhiều lần) — cần
+  `is_logged_in()` chủ động và xử lý mất session mượt mà (không giả định session sống lâu), tương tự
+  CGV.
+
+**CGV (đã research kỹ, để dành cho khi mở rộng):**
+
+- ~~Chưa xác nhận thời hạn giữ ghế (hold expiry) thực tế sau `ajaxadd`~~ — **đã xác nhận 2026-08-10**
+  bằng 1 lần thử thật có kiểm soát: đúng 5 phút, client-side, tự nhả qua
   `POST /default/cinemas/booking/ajaxdelete/` (xem mục "Kết quả research cơ chế đặt vé CGV"). Vẫn
   còn mở: 5 phút này có được server-side gia hạn/xác nhận độc lập khỏi client không (tức nếu người
   dùng tắt tab ngay sau khi khoá ghế, liệu ghế có nhả đúng lúc 5 phút hay chờ session timeout dài
-  hơn) — cần kiểm tra khi viết `providers/cgv.py` ở Phase 3.
+  hơn) — cần kiểm tra khi tới lúc viết `providers/cgv.py`.
 - Chưa rõ hành vi chính xác của lớp WAF (F5) khi gặp truy cập bất thường ngoài phạm vi "trình duyệt
   thật, session hợp lệ" — thiết kế chủ động không cố vượt qua nó, chỉ dừng và báo người dùng nếu gặp
   trang lạ, nên rủi ro lớn nhất chỉ là "bot phải dừng và chờ người", không phải rủi ro kỹ thuật.
-- Cơ chế đặt vé của BHD/Beta/Cinestar/Galaxy hoàn toàn chưa được research — interface `CinemaProvider`
-  chỉ là chỗ neo cho việc đó, không giả định trước điều gì về các rạp này.
+
+**Chưa research gì cả:** BHD, Cinestar, Galaxy CineX Hà Nội Centre — interface `CinemaProvider` chỉ
+là chỗ neo cho việc đó, không giả định trước điều gì về các rạp này.
