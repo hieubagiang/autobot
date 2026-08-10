@@ -74,9 +74,18 @@ def make_seat(label, status=SeatStatus.AVAILABLE, zone=SeatZone.STANDARD, col=1)
 
 def test_camp_loop_stops_immediately_if_already_stopped(tmp_path, monkeypatch):
     state_file = str(tmp_path / "state.json")
-    item = add_ticket_request(provider="beta", movie_query="X",
-                               date_range=["2026-08-10", "2026-08-10"], state_file=state_file)
-    provider = FakeProvider(logged_in=True)
+    # cinema_priority and FakeProvider are set up so a lockable candidate WOULD be found
+    # if the loop body ever ran — this is what lets the assertions below actually catch
+    # an implementation that checks stop_event too late (e.g. after ranking candidates).
+    item = add_ticket_request(provider="beta", movie_query="Người Nhện",
+                               date_range=["2026-08-10", "2026-08-10"],
+                               cinema_priority=["Beta Tây Sơn"], state_file=state_file)
+    cinema = Cinema(id="c1", name="Beta Tây Sơn", city="Hà Nội", provider="beta")
+    showtime = Showtime(id="s1", movie="Người Nhện", cinema=cinema, start_time="09:00", date="2026-08-10")
+    seat_map = SeatMap(rows=["A"], seats_by_row={"A": [make_seat("A1"), make_seat("A2")]})
+    lock_result = LockResult(success=True, hold_expiry="2026-08-10T09:05:00", payment_url="http://pay")
+    provider = FakeProvider(cinemas=[cinema], showtimes=[showtime], seat_maps=[seat_map],
+                             lock_result=lock_result, logged_in=True)
     monkeypatch.setattr("cinema_booking.control.get_provider", lambda name: provider)
 
     stop_event = threading.Event()
@@ -86,6 +95,7 @@ def test_camp_loop_stops_immediately_if_already_stopped(tmp_path, monkeypatch):
 
     assert notifications == []
     assert provider.get_seat_map_calls == []
+    assert provider.lock_seats_calls == []
 
 
 def test_camp_loop_notifies_and_waits_when_not_logged_in(tmp_path, monkeypatch):
