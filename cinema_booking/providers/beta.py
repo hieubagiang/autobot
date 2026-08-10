@@ -264,9 +264,12 @@ class BetaProvider(CinemaProvider):
 
         locked: list[Seat] = []
         for seat in seats:
-            response = self._call_seat_endpoint(page, SELECT_SEAT_PATH, seat.id,
-                                                 showtime.id, customer_id)
-            success, error = parse_lock_response(response)
+            try:
+                response = self._call_seat_endpoint(page, SELECT_SEAT_PATH, seat.id,
+                                                     showtime.id, customer_id)
+                success, error = parse_lock_response(response)
+            except Exception as exc:
+                success, error = False, f"SelectSeat request failed: {exc}"
             if not success:
                 self._release_seats(page, locked, showtime.id, customer_id)
                 return LockResult(success=False, error=f"failed to lock seat {seat.label}: {error}")

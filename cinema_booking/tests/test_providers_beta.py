@@ -571,6 +571,56 @@ def test_lock_seats_notifies_when_rollback_release_not_confirmed(monkeypatch):
     assert "A1" in notifications[0]
 
 
+class _FakeLockPageWithFailure(_FakeLockPage):
+    """Like _FakeLockPage, but raises on a chosen 1-based call number instead of
+    returning a scripted response -- simulates a network/JS error mid-fetch, not just an
+    IsYourSeat:false response."""
+
+    def __init__(self, customer_id: str, responses: list[dict], fail_on_call: int):
+        super().__init__(customer_id, responses)
+        self._fail_on_call = fail_on_call
+        self._call_count = 0
+
+    def evaluate(self, script, arg=None):
+        if arg is None:
+            return self.customer_id
+        self._call_count += 1
+        if self._call_count == self._fail_on_call:
+            raise RuntimeError("simulated network error")
+        return super().evaluate(script, arg)
+
+
+def test_lock_seats_rolls_back_on_network_error_during_select_seat(monkeypatch):
+    # A network/JS error while locking the SECOND seat (not just an IsYourSeat:false
+    # response) must still trigger rollback of the already-locked FIRST seat -- the
+    # brief's failure modes explicitly include "network error", not only a false response.
+    from cinema_booking.providers.beta import BetaProvider, RETURN_SEAT_PATH, SELECT_SEAT_PATH
+    showtime, seat_a1, seat_a2 = _beta_lock_fixtures()
+
+    provider = BetaProvider()
+    provider._film_session_ids[showtime.id] = "fsid-1"
+    fake_page = _FakeLockPageWithFailure(
+        customer_id="cust-guid-1",
+        responses=[
+            _select_seat_response(5, True),   # A1 locks fine (call #1)
+            # call #2 (A2's SelectSeat) raises instead of returning a response
+            _select_seat_response(5, False),  # call #3: ReturnSeat rollback of A1
+        ],
+        fail_on_call=2,
+    )
+    monkeypatch.setattr(provider, "_page", lambda: fake_page, raising=False)
+
+    result = provider.lock_seats(showtime, [seat_a1, seat_a2])
+
+    assert result.success is False
+    assert result.error is not None
+    calls = [arg for _script, arg in fake_page.evaluate_calls]
+    assert calls == [
+        [SELECT_SEAT_PATH, "5", "show-1", "cust-guid-1"],
+        [RETURN_SEAT_PATH, "5", "show-1", "cust-guid-1"],  # rollback still ran
+    ]
+
+
 def test_lock_seats_raises_value_error_when_film_session_id_unknown():
     # Same contract as get_seat_map: a Showtime that never went through this provider
     # instance's list_showtimes() has no known film_session_id -- lock_seats must fail
