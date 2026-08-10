@@ -68,6 +68,17 @@ class BookingResponseShapeError(RuntimeError):
     treating it like any other retryable RuntimeError."""
 
 
+def format_point_names(points: list[dict]) -> str:
+    """Lists every point name find_boarding_point() could actually match on this bus/date
+    (some route variants — a different operator, or a different bus_stage config, not just
+    the coastal/regular split already handled below — drop the direction's usual default
+    entirely; e.g. some Hà Tĩnh→Hà Nội buses use "BX YÊN NGHĨA" instead of the usual
+    "Số 275 Nguyễn Trãi" home-zone). Surfaced in the not-found error so the user can
+    immediately /setpickup or /setdropoff to one of these instead of guessing."""
+    names = [p.get("boarding_point_name") or p.get("home_pickup_zone_name") for p in points]
+    return ", ".join(n for n in names if n) or "(không có điểm nào)"
+
+
 def resolve_points(client: XecaClient, bus_time: dict, depart_date: int, direction: dict,
                     pickup_override: str | None, dropoff_override: str | None) -> tuple[dict, dict, str, str]:
     bus_time_id = bus_time["id"]
@@ -89,7 +100,10 @@ def resolve_points(client: XecaClient, bus_time: dict, depart_date: int, directi
         )
     pickup = find_boarding_point(pickup_points, pickup_name)
     if not pickup:
-        raise RuntimeError(f"Không tìm thấy điểm đón '{pickup_name}' cho chuyến {bus_time_id}")
+        raise RuntimeError(
+            f"Không tìm thấy điểm đón '{pickup_name}' cho chuyến {bus_time_id}. "
+            f"Điểm đón khả dụng: {format_point_names(pickup_points)}"
+        )
 
     if dropoff_override:
         dropoff_name = dropoff_override
@@ -104,7 +118,10 @@ def resolve_points(client: XecaClient, bus_time: dict, depart_date: int, directi
         )
     dropoff = find_boarding_point(dropoff_points, dropoff_name)
     if not dropoff:
-        raise RuntimeError(f"Không tìm thấy điểm trả '{dropoff_name}' cho chuyến {bus_time_id}")
+        raise RuntimeError(
+            f"Không tìm thấy điểm trả '{dropoff_name}' cho chuyến {bus_time_id}. "
+            f"Điểm trả khả dụng: {format_point_names(dropoff_points)}"
+        )
 
     return pickup, dropoff, pickup_name, dropoff_name
 
