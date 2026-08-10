@@ -193,7 +193,10 @@ def test_parse_seat_map_excludes_walkway_and_broken_cells(beta_seat_map_html):
     all_labels = {s.label for row in seat_map.seats_by_row.values() for s in row}
     # A15/A14/C15/L11 are seat-for-way walkway placeholders; "Lối vào" is a seat-broken
     # entrance marker. None of these are real bookable seats, so none should appear.
-    assert all_labels == {"A1", "A2", "A3", "A4", "C1", "C2", "L1", "L2"}
+    # L1 (the seat-double-hidden first half of the L1/L2 couple-seat pair) is also
+    # excluded here -- see test_parse_seat_map_merges_double_seat_pair_into_one_seat
+    # (finding I6): only L2, the visible second half, is emitted as a Seat.
+    assert all_labels == {"A1", "A2", "A3", "A4", "C1", "C2", "L2"}
 
 
 def test_parse_seat_map_maps_all_confirmed_status_classes(beta_seat_map_html):
@@ -219,7 +222,7 @@ def test_parse_seat_map_maps_zone_classes(beta_seat_map_html):
     by_label = {s.label: s for row in seat_map.seats_by_row.values() for s in row}
     assert by_label["A1"].zone == SeatZone.STANDARD  # seat-normal
     assert by_label["C1"].zone == SeatZone.VIP  # seat-vip
-    assert by_label["L1"].zone == SeatZone.SWEETBOX  # seat-double
+    assert by_label["L2"].zone == SeatZone.SWEETBOX  # seat-double (L1 is the hidden half)
 
 
 def test_parse_seat_map_uses_seat_index_as_id_and_reads_name_attr_not_merged_text(beta_seat_map_html):
@@ -259,7 +262,9 @@ def test_parse_seat_map_orders_seats_within_row_by_dom_order_left_to_right(beta_
     # own walkway cell C15 has a lower index than C1/C2 despite appearing after them).
     assert [s.label for s in seat_map.seats_by_row["A"]] == ["A1", "A2", "A3", "A4"]
     assert [s.label for s in seat_map.seats_by_row["C"]] == ["C1", "C2"]
-    assert [s.label for s in seat_map.seats_by_row["L"]] == ["L1", "L2"]
+    # L1 is the seat-double-hidden first half of the couple-seat pair -- excluded by
+    # finding I6's fix, so only L2 (the visible second half) represents the pair.
+    assert [s.label for s in seat_map.seats_by_row["L"]] == ["L2"]
 
 
 def test_parse_seat_map_finds_exactly_the_eight_real_seats_with_expected_statuses(beta_seat_map_html):
@@ -268,14 +273,32 @@ def test_parse_seat_map_finds_exactly_the_eight_real_seats_with_expected_statuse
 
     seat_map = parse_seat_map(beta_seat_map_html)
     all_seats = [s for row in seat_map.seats_by_row.values() for s in row]
-    # 8 real seat-used cells in the fixture (5 non-seat placeholders excluded). Only 3 of
+    # 7 Seats: 8 real seat-used cells in the fixture (5 non-seat placeholders excluded),
+    # minus 1 for L1 -- the seat-double-hidden first half of the L1/L2 couple-seat pair,
+    # which finding I6's fix skips so the pair collapses to a single Seat (L2). Only 3 of
     # the 4 confirmed status classes are distinct SeatStatus values here, since both
     # seat-select and seat-hold map to HELD.
-    assert len(all_seats) == 8
+    assert len(all_seats) == 7
     statuses_seen = {s.status for s in all_seats}
     assert SeatStatus.AVAILABLE in statuses_seen
     assert SeatStatus.SOLD in statuses_seen
     assert SeatStatus.HELD in statuses_seen
+
+
+def test_parse_seat_map_merges_double_seat_pair_into_one_seat(beta_seat_map_html):
+    # Regression test for finding I6: the fixture's L1/L2 pair is one physical
+    # couple-seat, linked via SeatIndexRelation and rendered as two DOM cells (L1 has
+    # class seat-double-hidden, L2 doesn't). parse_seat_map must emit exactly ONE Seat
+    # for the pair -- not two independent Seats pick_best_block could mismatch across
+    # two different couple-seats.
+    from cinema_booking.providers.beta import parse_seat_map
+
+    seat_map = parse_seat_map(beta_seat_map_html)
+    all_seats = [s for row in seat_map.seats_by_row.values() for s in row]
+    double_seats = [s for s in all_seats if s.label in ("L1", "L2")]
+    assert len(double_seats) == 1
+    assert double_seats[0].label == "L2"
+    assert double_seats[0].id == "189"
 
 
 class _FakePage:
@@ -494,6 +517,28 @@ def test_lock_seats_computes_hold_expiry_as_roughly_ten_minutes_from_now(monkeyp
     assert before + timedelta(minutes=9, seconds=55) <= expiry <= after + timedelta(minutes=10, seconds=5)
 
 
+def test_lock_seats_success_sets_payment_url_to_seat_map_page(monkeypatch):
+    # Regression test for finding I2: lock_seats' success path used to return
+    # LockResult(payment_url=None), which made the success Telegram message read
+    # "Link: None". payment_url must be the seat-selection page itself (the page the
+    # hold actually lives on), built the same way get_seat_map does.
+    from cinema_booking.providers.beta import BetaProvider, SEAT_MAP_URL
+    showtime, seat_a1, _seat_a2 = _beta_lock_fixtures()
+
+    provider = BetaProvider()
+    provider._film_session_ids[showtime.id] = "fsid-1"
+    fake_page = _FakeLockPage(customer_id="cust-guid-1", responses=[_select_seat_response(5, True)])
+    monkeypatch.setattr(provider, "_page", lambda: fake_page, raising=False)
+
+    result = provider.lock_seats(showtime, [seat_a1])
+
+    assert result.success is True
+    assert result.payment_url is not None
+    assert result.payment_url == f"{SEAT_MAP_URL}?f=fsid-1&s={showtime.id}"
+    assert showtime.id in result.payment_url
+    assert "fsid-1" in result.payment_url
+
+
 def test_lock_seats_rolls_back_already_locked_seats_on_partial_failure(monkeypatch):
     # Locking a block of seats means one SelectSeat call per seat (confirmed live: 2
     # seats -> 2 separate requests). If seat A2 fails after A1 already locked, A1 must be
@@ -636,3 +681,97 @@ def test_lock_seats_raises_value_error_when_film_session_id_unknown():
 
     with pytest.raises(ValueError):
         provider.lock_seats(showtime, [])
+
+
+# ---------------------------------------------------------------------------
+# Finding I4: cache home.htm on the provider instance
+# ---------------------------------------------------------------------------
+
+
+def test_home_html_is_cached_across_list_cinemas_and_find_film_id_calls(beta_home_html, monkeypatch):
+    # Regression test for finding I4: list_cinemas() and _find_film_id() (called from
+    # list_showtimes()) each independently did a fresh GET home.htm -- meaning a single
+    # camp-loop iteration could fetch it 2+ times against a Cloudflare-fronted site. One
+    # BetaProvider instance must only fetch home.htm once across repeated calls.
+    from cinema_booking.providers.beta import BetaProvider
+
+    call_count = {"n": 0}
+
+    def counting_get(url, **kwargs):
+        call_count["n"] += 1
+        return type("R", (), {"text": beta_home_html, "raise_for_status": lambda self: None})()
+
+    monkeypatch.setattr("cinema_booking.providers.beta.requests.get", counting_get)
+    provider = BetaProvider()
+
+    provider.list_cinemas()
+    provider._find_film_id("Người Nhện")
+    provider.list_cinemas()
+
+    assert call_count["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Finding I7: get_seat_map must notify (not silently return) an all-empty SeatMap
+# ---------------------------------------------------------------------------
+
+
+def test_get_seat_map_notifies_when_parse_returns_all_empty_seat_map(monkeypatch):
+    # Regression test for finding I7: parse_seat_map returning an all-empty SeatMap
+    # (zero seats across every row) signals the page wasn't actually a seat-selection
+    # page (login redirect, error page, Cloudflare interstitial) -- not "no seats free
+    # right now". get_seat_map must surface this via notify() so the camp loop's silent
+    # polling becomes observable, without raising (polling should keep going).
+    from cinema_booking.providers.beta import BetaProvider
+    from cinema_booking.types import Cinema, SeatMap, Showtime
+
+    notifications = []
+    provider = BetaProvider(notify=notifications.append)
+    cinema = Cinema(id="381f745f-c110-4d0c-9117-3a79f36ba9c4", name="Beta Tây Sơn",
+                     city="", provider="beta")
+    showtime = Showtime(id="show-1", movie="Some Movie", cinema=cinema,
+                         start_time="08:10", date="2026-08-11")
+    provider._film_session_ids[showtime.id] = "fsid-1"
+
+    fake_page = _FakePage("<html>some unexpected page, e.g. a login redirect</html>")
+    monkeypatch.setattr(provider, "_page", lambda: fake_page, raising=False)
+    monkeypatch.setattr("cinema_booking.providers.beta.parse_seat_map",
+                         lambda html: SeatMap(rows=[], seats_by_row={}))
+
+    seat_map = provider.get_seat_map(showtime)
+
+    assert seat_map.rows == []
+    assert len(notifications) == 1
+    assert "rỗng" in notifications[0]
+
+
+def test_get_seat_map_does_not_notify_when_seat_map_has_seats(
+    beta_home_html, beta_showtimes_json, beta_seat_map_html, monkeypatch,
+):
+    # Sanity counterpart: a normal, non-empty seat map must NOT trigger the I7 notify.
+    from cinema_booking.providers.beta import BetaProvider
+    from cinema_booking.types import Cinema
+
+    def fake_get(url, **kwargs):
+        return type("R", (), {"text": beta_home_html, "raise_for_status": lambda self: None})()
+
+    def fake_post(url, **kwargs):
+        return type("R", (), {"json": lambda self: beta_showtimes_json, "raise_for_status": lambda self: None})()
+
+    monkeypatch.setattr("cinema_booking.providers.beta.requests.get", fake_get)
+    monkeypatch.setattr("cinema_booking.providers.beta.requests.post", fake_post)
+
+    notifications = []
+    provider = BetaProvider(notify=notifications.append)
+    cinema = Cinema(id="381f745f-c110-4d0c-9117-3a79f36ba9c4", name="Beta Tây Sơn",
+                     city="", provider="beta")
+    showtimes = provider.list_showtimes(cinema, movie_query="Người Nhện",
+                                         date_range=("2026-08-11", "2026-08-11"))
+    showtime = showtimes[0]
+
+    fake_page = _FakePage(beta_seat_map_html)
+    monkeypatch.setattr(provider, "_page", lambda: fake_page, raising=False)
+
+    provider.get_seat_map(showtime)
+
+    assert notifications == []

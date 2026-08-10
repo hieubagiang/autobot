@@ -109,6 +109,16 @@ def parse_seat_map(html: str) -> SeatMap:
             continue
         if "seat-used" not in classes:
             continue  # not a real, bookable seat cell
+        if "seat-double-hidden" in classes:
+            # First half of a Beta "sweetheart"/couple-seat pair (two seat-cells linked
+            # via SeatIndexRelation, e.g. L1/L2). The site's own JS hides this cell and
+            # merges the visual label onto the SECOND cell -- skip it here so
+            # parse_seat_map emits exactly ONE Seat per physical couple-seat (using the
+            # second cell's own data-seat-index/name/price/status below), instead of two
+            # independent Seats that pick_best_block could mismatch across two different
+            # couple-seats. Known simplification (finding I6): the resulting Seat.label
+            # is just the second half's plain name (e.g. "L2"), not the merged "L1 - L2".
+            continue
 
         name = (cell.get("data-seat-name") or "").strip()
         seat_index = int(cell.get("data-seat-index") or 0)
@@ -190,6 +200,13 @@ class BetaProvider(CinemaProvider):
         self._context = None
         self._page_obj = None
 
+        # Cache of home.htm's raw HTML (finding I4). list_cinemas() and _find_film_id()
+        # (called from list_showtimes()) each independently used to do a fresh GET
+        # home.htm -- meaning a single camp-loop iteration could fetch it 2+ times
+        # against a Cloudflare-fronted site. Simplicity over cleverness for this wave:
+        # cache until explicitly invalidated (no TTL), not per-call.
+        self._home_html_cache: str | None = None
+
     def _page(self):
         if self._page_obj is None:
             self._playwright = sync_playwright().start()
@@ -235,7 +252,23 @@ class BetaProvider(CinemaProvider):
             )
         page = self._page()
         page.goto(f"{SEAT_MAP_URL}?f={film_session_id}&s={showtime.id}")
-        return parse_seat_map(page.content())
+        seat_map = parse_seat_map(page.content())
+
+        total_seats = sum(len(seats) for seats in seat_map.seats_by_row.values())
+        if total_seats == 0:
+            # An all-empty SeatMap here is NOT a normal "no seats free right now" poll
+            # result -- parse_seat_map only ever returns zero seats when the page isn't
+            # actually a seat-selection page (login redirect, error page, Cloudflare
+            # interstitial). Don't raise (the camp loop should keep polling, same as its
+            # existing "no seats found this poll" behavior for pick_best_block(None)) --
+            # just make the situation observable instead of silently polling forever with
+            # no signal (finding I7).
+            self.notify(
+                f"[beta] Seat map cho showtime {showtime.id} trả về rỗng (0 ghế) -- "
+                "có thể do session hết hạn, bị redirect về trang đăng nhập, hoặc gặp "
+                "Cloudflare challenge. Vẫn tiếp tục poll."
+            )
+        return seat_map
 
     def lock_seats(self, showtime: Showtime, seats: list[Seat]) -> LockResult:
         """Lock a block of seats via Beta's real SelectSeat endpoint.
@@ -276,7 +309,11 @@ class BetaProvider(CinemaProvider):
             locked.append(seat)
 
         hold_expiry = (datetime.now() + timedelta(minutes=HOLD_MINUTES)).isoformat()
-        return LockResult(success=True, hold_expiry=hold_expiry)
+        # payment_url: the seat-selection page URL itself, since that's the page the
+        # hold actually lives on (Beta has no separate "review your hold" page) --
+        # without this, the success Telegram message read "Link: None" (finding I2).
+        payment_url = f"{SEAT_MAP_URL}?f={film_session_id}&s={showtime.id}"
+        return LockResult(success=True, hold_expiry=hold_expiry, payment_url=payment_url)
 
     def _call_seat_endpoint(self, page, path: str, seat_index: str, show_id: str,
                              customer_id: str) -> dict:
@@ -307,18 +344,23 @@ class BetaProvider(CinemaProvider):
                     f"rollback -- may be an orphaned hold, check manually: {exc}"
                 )
 
+    def _get_home_html(self) -> str:
+        if self._home_html_cache is None:
+            resp = requests.get(HOME_URL, timeout=15)
+            resp.raise_for_status()
+            self._home_html_cache = resp.text
+        return self._home_html_cache
+
     def list_cinemas(self) -> list[Cinema]:
-        resp = requests.get(HOME_URL, timeout=15)
-        resp.raise_for_status()
+        html = self._get_home_html()
         return [
             Cinema(id=cinema_id, name=name, city="", provider="beta")
-            for cinema_id, name in CHOOSE_CINEMA_RE.findall(resp.text)
+            for cinema_id, name in CHOOSE_CINEMA_RE.findall(html)
         ]
 
     def _find_film_id(self, movie_query: str) -> tuple[str, str] | None:
-        resp = requests.get(HOME_URL, timeout=15)
-        resp.raise_for_status()
-        for _cinema_id, film_id, film_name, _cinema_name in VIEWS_SHOWTIMES_RE.findall(resp.text):
+        html = self._get_home_html()
+        for _cinema_id, film_id, film_name, _cinema_name in VIEWS_SHOWTIMES_RE.findall(html):
             if movie_query.lower() in film_name.lower():
                 return film_id, film_name
         return None
