@@ -1,5 +1,8 @@
 from datetime import date, timedelta
 
+from cinema_booking.provider import CinemaProvider
+from cinema_booking.types import Showtime
+
 MON_WED = {0, 2}  # date.weekday(): Monday=0 .. Sunday=6
 
 
@@ -34,3 +37,29 @@ def rank_dates(date_range: list[str]) -> list[str]:
     days = list(_daterange(start, end))
     ranked = sorted(days, key=lambda d: (0 if d.weekday() in MON_WED else 1, d))
     return [d.isoformat() for d in ranked]
+
+
+DEFAULT_CINEMA_PRIORITY: dict[str, list[str]] = {
+    "beta": ["Beta Tây Sơn"],
+}
+
+
+def get_provider(name: str) -> CinemaProvider:
+    if name == "beta":
+        from cinema_booking.providers.beta import BetaProvider
+        return BetaProvider()
+    raise ValueError(f"Unknown provider: {name}")
+
+
+def rank_showtime_candidates(provider: CinemaProvider, cinema_priority: list[str],
+                              movie_query: str, date_range: list[str]) -> list[Showtime]:
+    cinemas_by_name = {c.name: c for c in provider.list_cinemas()}
+    ranked_dates = rank_dates(date_range)
+    candidates: list[Showtime] = []
+    for cinema_name in cinema_priority:
+        cinema = cinemas_by_name.get(cinema_name)
+        if cinema is None:
+            continue
+        for day in ranked_dates:
+            candidates.extend(provider.list_showtimes(cinema, movie_query, (day, day)))
+    return candidates
