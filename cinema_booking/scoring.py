@@ -31,7 +31,7 @@ def seat_sort_key(row_index: int, total_rows: int, col_index: int,
     )
 
 
-def leaves_isolated_gap(row_seats: list, start_idx: int, length: int) -> bool:
+def leaves_isolated_gap(row_seats: list[Seat], start_idx: int, length: int) -> bool:
     def is_available(idx: int) -> bool:
         return 0 <= idx < len(row_seats) and row_seats[idx].status == SeatStatus.AVAILABLE
 

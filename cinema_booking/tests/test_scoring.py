@@ -74,7 +74,20 @@ def test_two_empty_seats_on_the_right_is_not_isolated():
 
 
 def test_isolated_single_seat_on_the_left_is_rejected():
-    # [sold, LONE EMPTY, taken, taken] -> index 1 is isolated.
+    # [sold, LONE EMPTY, taken, taken] -> block at indices 2,3 leaves index 1 isolated.
     row = [seat(SeatStatus.SOLD), seat(SeatStatus.AVAILABLE),
            seat(SeatStatus.AVAILABLE), seat(SeatStatus.AVAILABLE)]
-    assert leaves_isolated_gap(row, start_idx=1, length=2) is True
+    assert leaves_isolated_gap(row, start_idx=2, length=2) is True
+
+
+def test_two_empty_seats_on_the_left_is_not_isolated():
+    # [empty, empty, taken, taken] -> the two empties on the left aren't a lone gap.
+    row = [seat(SeatStatus.AVAILABLE), seat(SeatStatus.AVAILABLE),
+           seat(SeatStatus.AVAILABLE), seat(SeatStatus.AVAILABLE)]
+    assert leaves_isolated_gap(row, start_idx=2, length=2) is False
+
+
+def test_no_gap_when_block_is_at_row_end():
+    # [sold, taken, taken] -> block at row end, no isolated gap on right (row edge).
+    row = [seat(SeatStatus.SOLD), seat(SeatStatus.AVAILABLE), seat(SeatStatus.AVAILABLE)]
+    assert leaves_isolated_gap(row, start_idx=1, length=2) is False
