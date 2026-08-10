@@ -104,9 +104,26 @@ viết code "khống" cho các provider chưa research, tránh over-engineering.
   `id="cgv_city_3"` = Hà Nội) → mỗi rạp có `id="cgv_site_<mã>"` và slug (ví dụ
   `cgv-vincom-royal-city`), dẫn tới trang lịch chiếu `/default/cinox/site/<slug>` — trang này có
   bộ chọn ngày + danh sách phim/giờ chiếu, là nguồn cho `list_showtimes()`.
-- **Chưa xác nhận**: thời hạn giữ ghế (hold expiry) sau khi `ajaxadd` thành công — nghiên cứu chưa
-  đi tới bước xác nhận tuổi thật (để tránh tạo giữ-chỗ thật ngoài ý muốn, giống sự cố đã xảy ra với
-  xeca). Cần xác nhận việc này ở Phase 3 bằng một lần thử thật, có kiểm soát.
+- **Đã xác nhận bằng 1 lần thử thật, có kiểm soát** (chọn ghế A20/Thường tại suất 22:10 10/08/2026,
+  Cinema 7 — không phải suất/ghế "đẹp" để giảm ảnh hưởng tới khách thật, và đã giải phóng lại ngay
+  sau khi đo được số liệu): thời hạn giữ ghế (hold) sau khi `ajaxadd` thành công là **CHÍNH XÁC 5
+  PHÚT**, tính hoàn toàn ở client-side (`countDownDate.setMinutes(getMinutes() + 5)`) — ngắn hơn
+  rất nhiều so với mốc ~20 phút của xeca. Khi đồng hồ về 0, trang tự gọi
+  `POST /default/cinemas/booking/ajaxdelete/` (không cần body, chỉ cần session cookie hiện tại) để
+  nhả ghế — bot có thể gọi endpoint này chủ động để hủy giữ chỗ sớm (đã kiểm chứng: gọi ngay sau khi
+  `ajaxadd` được ~1 phút, seat map load lại cho thấy ghế A20 trở lại `seat-standard active`, không
+  còn bị giữ).
+  - **Tác động tới thiết kế**: 5 phút là RẤT NGẮN so với toàn bộ luồng chọn combo → xác nhận tuổi →
+    thanh toán. `instant_camp_loop` phải coi "khoá ghế thành công" là điểm báo Telegram NGAY, và
+    người dùng phải quyết định thanh toán trong vòng 5 phút đó — không có nhiều thời gian chờ như
+    với xe khách. Nên cân nhắc thêm bước tự động bấm tiếp tới trang thanh toán (lấy `payment_url`)
+    ngay trong lúc khoá ghế, để đồng hồ 5 phút của người dùng bắt đầu từ lúc họ nhận được link, gần
+    hết mức có thể với 5 phút thật của CGV (chi tiết luồng combo→payment cụ thể vẫn để research ở
+    Phase 3 khi viết `providers/cgv.py`, tài liệu này chỉ cần biết mốc 5 phút để thiết kế đúng).
+  - `LockResult.hold_expiry` nên được tính bằng `thời điểm ajaxadd thành công + 5 phút` (client-side
+    only, không có field expiry riêng trong response `ajaxadd`) — cần re-xác nhận nếu CGV thay đổi
+    giá trị này trong tương lai, vì đây là hằng số hard-code trong JS của họ, không phải cấu hình
+    trả về từ server.
 
 ## Quy tắc chấm điểm ghế (`scoring.py`)
 
@@ -171,7 +188,8 @@ và `total_cols` cột (theo từng hàng):
   dùng có thể quyết định thanh toán hay bỏ qua (để hold tự hết hạn) tuỳ ý, giống hệt cách
   `xeca_telegram_bot.py` xử lý trạng thái `pending_payment` + lệnh `/paid`. Bot **không** tự động
   thanh toán — chỉ gửi link/trang thanh toán để người dùng tự hoàn tất nếu muốn, trong thời hạn giữ
-  chỗ (thời hạn cụ thể của CGV **chưa được xác nhận**, xem mục Rủi ro/điểm còn mở).
+  chỗ — đã đo được thực tế là **5 phút** (xem mục "Kết quả research cơ chế đặt vé CGV" ở trên), rất
+  ngắn nên Telegram phải báo ngay lập tức, gần như không có khoảng trễ chấp nhận được.
 
 ## Watchlist & lệnh Telegram (`telegram_bot.py`)
 
@@ -206,9 +224,12 @@ Theo đúng khuôn mẫu đã có ở `xeca_telegram_bot.py`, có provider ở �
 
 ## Rủi ro / điểm còn mở
 
-- Chưa xác nhận thời hạn giữ ghế (hold expiry) thực tế của CGV sau `ajaxadd` — cần một lần thử thật
-  có kiểm soát ở Phase 3 để lấy số liệu (tương tự cách xeca xác định mốc ~20 phút qua
-  `get-book-expired-time`).
+- ~~Chưa xác nhận thời hạn giữ ghế (hold expiry) thực tế của CGV sau `ajaxadd`~~ — **đã xác nhận
+  2026-08-10** bằng 1 lần thử thật có kiểm soát: đúng 5 phút, client-side, tự nhả qua
+  `POST /default/cinemas/booking/ajaxdelete/` (xem mục "Kết quả research cơ chế đặt vé CGV"). Vẫn
+  còn mở: 5 phút này có được server-side gia hạn/xác nhận độc lập khỏi client không (tức nếu người
+  dùng tắt tab ngay sau khi khoá ghế, liệu ghế có nhả đúng lúc 5 phút hay chờ session timeout dài
+  hơn) — cần kiểm tra khi viết `providers/cgv.py` ở Phase 3.
 - Chưa rõ hành vi chính xác của lớp WAF (F5) khi gặp truy cập bất thường ngoài phạm vi "trình duyệt
   thật, session hợp lệ" — thiết kế chủ động không cố vượt qua nó, chỉ dừng và báo người dùng nếu gặp
   trang lạ, nên rủi ro lớn nhất chỉ là "bot phải dừng và chờ người", không phải rủi ro kỹ thuật.
