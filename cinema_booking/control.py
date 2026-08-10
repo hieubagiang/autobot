@@ -45,11 +45,22 @@ DEFAULT_CINEMA_PRIORITY: dict[str, list[str]] = {
     "beta": ["Beta Tây Sơn"],
 }
 
+# Per-name provider instance cache (finding I5). Repeated get_provider("beta") calls
+# must return the SAME BetaProvider instance -- otherwise two concurrent camp loops for
+# the same provider would each spin up their own Playwright persistent-context profile
+# on the same profile_dir, which collides (a Chromium persistent profile can only be
+# owned by one running process at a time).
+_provider_instances: dict[str, CinemaProvider] = {}
+
 
 def get_provider(name: str) -> CinemaProvider:
+    if name in _provider_instances:
+        return _provider_instances[name]
     if name == "beta":
         from cinema_booking.providers.beta import BetaProvider
-        return BetaProvider()
+        provider = BetaProvider()
+        _provider_instances[name] = provider
+        return provider
     raise ValueError(f"Unknown provider: {name}")
 
 
@@ -57,13 +68,20 @@ def rank_showtime_candidates(provider: CinemaProvider, cinema_priority: list[str
                               movie_query: str, date_range: list[str]) -> list[Showtime]:
     cinemas_by_name = {c.name: c for c in provider.list_cinemas()}
     ranked_dates = rank_dates(date_range)
+    date_rank = {d: i for i, d in enumerate(ranked_dates)}
     candidates: list[Showtime] = []
     for cinema_name in cinema_priority:
         cinema = cinemas_by_name.get(cinema_name)
         if cinema is None:
             continue
-        for day in ranked_dates:
-            candidates.extend(provider.list_showtimes(cinema, movie_query, (day, day)))
+        # One call for the whole date range, not one per ranked day: Beta's
+        # LoadShowtimesByFilm response already contains every date-tab in a single
+        # response (finding I4), and other providers' list_showtimes are expected to
+        # respect date_range the same way. We recover the Mon/Wed-first ordering
+        # ourselves afterward, by sorting this cinema's showtimes on date_rank.
+        showtimes = provider.list_showtimes(cinema, movie_query, (date_range[0], date_range[-1]))
+        showtimes = sorted(showtimes, key=lambda s: date_rank.get(s.date, len(ranked_dates)))
+        candidates.extend(showtimes)
     return candidates
 
 
@@ -72,30 +90,49 @@ def instant_camp_loop(item_id: str, stop_event, notify, state_file: str = DEFAUL
     item = get_item(item_id, state_file)
     if item is None:
         return
-    provider = get_provider(item["provider"])
 
     while not stop_event.is_set():
-        if not provider.is_logged_in():
-            notify(f"[{item_id}] Provider {item['provider']} chưa đăng nhập — vui lòng đăng nhập lại.")
-            stop_event.wait(poll_interval_seconds)
-            continue
+        try:
+            provider = get_provider(item["provider"])
 
-        candidates = rank_showtime_candidates(
-            provider, item["cinema_priority"], item["movie_query"], item["date_range"]
-        )
-        for showtime in candidates:
-            seat_map = provider.get_seat_map(showtime)
-            block = pick_best_block(seat_map, item["quantity"], item["prefer_sweetbox"])
-            if block is None:
+            if not provider.is_logged_in():
+                notify(f"[{item_id}] Provider {item['provider']} chưa đăng nhập — vui lòng đăng nhập lại.")
+                stop_event.wait(poll_interval_seconds)
                 continue
-            result = provider.lock_seats(showtime, block)
-            if result.success:
-                seat_labels = [s.label for s in block]
-                update_item(item_id, path=state_file, status="pending_payment",
-                            hold_expiry=result.hold_expiry, payment_url=result.payment_url,
-                            seat_labels=seat_labels)
-                notify(f"[{item_id}] Đã giữ ghế: {', '.join(seat_labels)} — "
-                       f"hạn giữ chỗ: {result.hold_expiry}. Link: {result.payment_url}")
+
+            candidates = rank_showtime_candidates(
+                provider, item["cinema_priority"], item["movie_query"], item["date_range"]
+            )
+            locked = False
+            for showtime in candidates:
+                seat_map = provider.get_seat_map(showtime)
+                block = pick_best_block(seat_map, item["quantity"], item["prefer_sweetbox"])
+                if block is None:
+                    continue
+                result = provider.lock_seats(showtime, block)
+                if result.success:
+                    seat_labels = [s.label for s in block]
+                    # instant=False: once a lock succeeds, this item must NOT be
+                    # re-camped on the next bot restart (finding I3) -- otherwise
+                    # resume_instant_items would spin up a second camp loop that could
+                    # go on to lock (and double-book) a second, unrelated seat block for
+                    # an item the user is already deciding whether to pay for.
+                    update_item(item_id, path=state_file, status="pending_payment",
+                                hold_expiry=result.hold_expiry, payment_url=result.payment_url,
+                                seat_labels=seat_labels, instant=False)
+                    notify(f"[{item_id}] Đã giữ ghế: {', '.join(seat_labels)} — "
+                           f"hạn giữ chỗ: {result.hold_expiry}. Link: {result.payment_url}")
+                    locked = True
+                    break
+            if locked:
                 return
+        except Exception as e:
+            # Any transient error (unknown provider name, HTTP error inside the real
+            # BetaProvider's list_cinemas/list_showtimes, a Playwright error, ...) must
+            # NOT be allowed to propagate and kill this daemon thread silently (finding
+            # C1) -- the caller (telegram_bot.Bot) still believes the camp is running
+            # (instant_threads[item_id] stays populated, /status still shows "instant")
+            # unless we notify and keep looping instead of dying.
+            notify(f"[{item_id}] Lỗi camp loop: {e}")
 
         stop_event.wait(poll_interval_seconds)

@@ -81,7 +81,15 @@ class Bot:
 
     def resume_instant_items(self):
         for item in list_ticket_requests(self.state_file):
-            if item.get("instant"):
+            # Only "pending" items are actually still camping for a seat. An item whose
+            # status is already "pending_payment" (a lock already succeeded) or "paid"
+            # must NOT be re-camped on restart (finding I3) -- doing so could lock a
+            # second, unrelated seat block for the same watchlist entry while the user is
+            # still deciding whether to pay for the first one. Belt-and-suspenders with
+            # instant_camp_loop's own instant=False-on-success write (control.py); this
+            # guard also protects against any stale "instant": true left over from state
+            # written by an older version of the bot.
+            if item.get("instant") and item.get("status") == "pending":
                 print(f"[BOT] Resuming instant camp for {item['id']} after restart")
                 self._start_instant(item["id"])
 

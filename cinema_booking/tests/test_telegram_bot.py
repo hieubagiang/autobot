@@ -109,6 +109,39 @@ def test_cmd_paid_marks_status_and_stops_instant(tmp_path, monkeypatch):
     assert stop_event.is_set()
 
 
+def test_resume_instant_items_skips_item_with_pending_payment_status(tmp_path, monkeypatch):
+    # Regression test for finding I3: an item whose lock already succeeded
+    # (status="pending_payment") must NOT be re-camped on bot restart even if a stale
+    # "instant": True is still sitting in state (e.g. from before instant_camp_loop was
+    # fixed to clear it on success, or from an older version of the bot's state file).
+    bot = make_bot(tmp_path)
+    bot.dispatch('/add beta "Người Nhện" 12/08/2026')
+    item_id = list_ticket_requests(bot.state_file)[0]["id"]
+    update_item(item_id, path=bot.state_file, instant=True, status="pending_payment")
+
+    started = []
+    monkeypatch.setattr(bot, "_start_instant", lambda iid: started.append(iid))
+
+    bot.resume_instant_items()
+
+    assert started == []
+    assert item_id not in bot.instant_threads
+
+
+def test_resume_instant_items_resumes_pending_item(tmp_path, monkeypatch):
+    bot = make_bot(tmp_path)
+    bot.dispatch('/add beta "Người Nhện" 12/08/2026')
+    item_id = list_ticket_requests(bot.state_file)[0]["id"]
+    update_item(item_id, path=bot.state_file, instant=True)  # status stays "pending"
+
+    started = []
+    monkeypatch.setattr(bot, "_start_instant", lambda iid: started.append(iid))
+
+    bot.resume_instant_items()
+
+    assert started == [item_id]
+
+
 def test_cmd_instant_off_unknown_id_reports_not_found(tmp_path):
     bot = make_bot(tmp_path)
     reply = bot.dispatch("/instant unknown-id off")
