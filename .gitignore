@@ -15,6 +15,10 @@ DONE|*
 state.json
 state.json.tmp
 
+# cinema_booking runtime watchlist state (differs per-environment, not source)
+cinema_booking_state.json
+cinema_booking_state.json.tmp
+
 # TQTT registrants chứa CCCD/SĐT/email THẬT — không commit, xem data/tqtt_registrants.example.json
 data/registrants.json
 

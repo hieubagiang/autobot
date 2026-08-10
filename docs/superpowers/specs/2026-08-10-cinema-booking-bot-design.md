@@ -66,6 +66,11 @@ Kiểu dữ liệu chung, không rạp nào (CGV/BHD/...) được phép rò và
 - `Showtime(id, movie, cinema, start_time, date)`
 - `Seat(label, row, col, zone, price, status)` — `zone` là enum chung: `STANDARD | VIP | SWEETBOX`
   (mỗi provider tự map ký hiệu riêng của họ, ví dụ CGV's `"Thường"/"Vip"/"Sw"`, sang enum này)
+  — **Lưu ý bổ sung (thêm trong lúc triển khai, không có trong bản gốc)**: `Seat` thực tế còn có
+  một trường `id` (`Seat(id, label, row, col, zone, price, status)`) — đây là định danh "wire"
+  dùng để gọi thật `SelectSeat`/`ReturnSeat` (với Beta: chính là `data-seat-index`, KHÁC với `label`
+  hiển thị) — trọng yếu hơn `label` với các provider thật, dù bản spec gốc của `types.py` chưa nhắc
+  tới vì viết trước khi nghiên cứu kỹ endpoint giữ ghế thật.
 - `SeatMap(rows, cols, seats)`
 - `LockResult(success, hold_expiry, payment_url, error)`
 
@@ -298,10 +303,13 @@ và `total_cols` cột (theo từng hàng):
   dùng có thể quyết định thanh toán hay bỏ qua (để hold tự hết hạn) tuỳ ý, giống hệt cách
   `xeca_telegram_bot.py` xử lý trạng thái `pending_payment` + lệnh `/paid`. Bot **không** tự động
   thanh toán — chỉ gửi link/trang thanh toán để người dùng tự hoàn tất nếu muốn, trong thời hạn giữ
-  chỗ — đã đo được thực tế là **5 phút** (xem mục "Kết quả research cơ chế đặt vé CGV" ở trên), rất
-  ngắn (với CGV, xem mục research CGV) — nên Telegram phải báo ngay lập tức. Với Beta Cinemas, thời
-  hạn giữ ghế **chưa được đo** — cần xác nhận khi viết `providers/beta.py` (Phase 3), tạm thiết kế
-  theo hướng báo ngay lập tức giống CGV cho tới khi có số liệu thật.
+  chỗ — đã đo được thực tế là **5 phút** với CGV (xem mục "Kết quả research cơ chế đặt vé CGV" ở
+  trên), rất ngắn — nên Telegram phải báo ngay lập tức. Với Beta Cinemas, thời hạn giữ ghế đã có một
+  **ước lượng xác nhận 2026-08-10** (Task 12 live spike, xem addendum trong mục research Beta):
+  **10 phút**, dựa trên đồng hồ đếm ngược hiển thị của trang `chon-ghe.htm` (không phải một field
+  expiry riêng do server trả về cho từng ghế — xem addendum để biết lý do đây vẫn là ước lượng, chưa
+  phải số đo server-side chính xác 100%) — `providers/beta.py` dùng trực tiếp giá trị 10 phút này
+  cho `LockResult.hold_expiry`, cùng nguyên tắc báo ngay lập tức giống CGV.
 
 ## Watchlist & lệnh Telegram (`telegram_bot.py`)
 
