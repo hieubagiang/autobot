@@ -267,7 +267,9 @@ def instant_lock_loop(item_id: str, stop_event, notify,
             try:
                 plan = plan_booking(client, item["depart_date"], direction, item.get("quantity", 1),
                                      item.get("pickup_name"), item.get("dropoff_name"),
-                                     allow_middle_seats=True)
+                                     allow_middle_seats=True,
+                                     depart_from=item.get("depart_from"), depart_to=item.get("depart_to"),
+                                     allow_limousine=item.get("bus_type", "ca_hai") != "thuong")
             except SaleNotOpenError as e:
                 wait_seconds = next_poll_interval(INSTANT_RETRY_NOT_OPEN_SECONDS, 0, target_ts)
                 # Suppressed entirely while tight (would be every 0.4s otherwise) and

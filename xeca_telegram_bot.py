@@ -10,6 +10,7 @@ under each /list item — buttons call the same handlers as the text commands):
   /add <HN-HT|HT-HN> <dd/mm/yyyy|yyyymmdd> [quantity=1]  - add a ticket request
   /setpickup <id> <tên điểm đón...>                       - override pickup point
   /setdropoff <id> <tên điểm trả...>                      - override dropoff point
+  /setdeparttime <id> <X> <Y> [thuong|ca_hai]              - restrict to departures in [X,Y] + bus type
   /list                                                    - list watchlist items (with buttons)
   /remove <id>                                             - remove an item
   /status                                                  - service + live sale-open check
@@ -75,6 +76,7 @@ BOT_COMMANDS = [
     {"command": "remove", "description": "Xoá 1 vé khỏi watchlist"},
     {"command": "setpickup", "description": "Ghi đè điểm đón"},
     {"command": "setdropoff", "description": "Ghi đè điểm trả"},
+    {"command": "setdeparttime", "description": "Giới hạn khung giờ khởi hành + loại xe: <id> <X> <Y> [thuong|ca_hai]"},
     {"command": "passenger", "description": "Xem thông tin hành khách hiện tại"},
     {"command": "setpassenger", "description": "Đổi tên/SĐT hành khách: <sđt> <tên>"},
     {"command": "logs", "description": "Xem log gần nhất"},
@@ -149,6 +151,9 @@ def format_item(item: dict, live: dict | None = None) -> str:
         line += f"\n  Đón: {item['pickup_name']}"
     if item.get("dropoff_name"):
         line += f"\n  Trả: {item['dropoff_name']}"
+    if item.get("depart_from") and item.get("depart_to"):
+        bus_label = "thường" if item.get("bus_type", "ca_hai") == "thuong" else "cả 2 loại"
+        line += f"\n  Khởi hành: {item['depart_from']}-{item['depart_to']} ({bus_label})"
     if live:
         if live.get("error"):
             line += f"\n  ⚠️ {live['error']}"
@@ -359,6 +364,7 @@ class Bot:
             "/add": self.cmd_add,
             "/setpickup": self.cmd_setpickup,
             "/setdropoff": self.cmd_setdropoff,
+            "/setdeparttime": self.cmd_setdeparttime,
             "/list": self.cmd_list,
             "/remove": self.cmd_remove,
             "/status": self.cmd_status,
@@ -388,6 +394,9 @@ class Bot:
             "/add <HN-HT|HT-HN> <dd/mm/yyyy> [số lượng=1]\n"
             "/setpickup <id> <tên điểm đón>\n"
             "/setdropoff <id> <tên điểm trả>\n"
+            "/setdeparttime <id> <X> <Y> [thuong|ca_hai] — chỉ xét chuyến khởi hành trong [X,Y] + loại xe "
+            "(mặc định ca_hai — cả xe thường lẫn Limousine), áp dụng cho cả /book và instant, vd "
+            "/setdeparttime abc123 20:00 23:59 thuong\n"
             "/list — danh sách vé đang theo dõi (kèm nút bấm)\n"
             "/remove <id>\n"
             "/status — trạng thái service + kiểm tra mở bán trực tiếp\n"
@@ -460,6 +469,28 @@ class Bot:
             return f"Không tìm thấy id={item_id}"
         update_item(item_id, path=self.state_file, dropoff_name=name)
         return f"✅ Đã set điểm trả cho [{item_id}]: {name}"
+
+    def cmd_setdeparttime(self, rest: str) -> str:
+        parts = rest.split()
+        if len(parts) not in (3, 4):
+            return "Cú pháp: /setdeparttime <id> <X> <Y> [thuong|ca_hai] (vd: /setdeparttime abc123 20:00 23:59 thuong)"
+        item_id, depart_from, depart_to = parts[0], parts[1], parts[2]
+        item = get_item(item_id, self.state_file)
+        if not item:
+            return f"Không tìm thấy id={item_id}"
+        if not parse_time_input(depart_from) or not parse_time_input(depart_to):
+            return "Giờ không hợp lệ, dùng định dạng HH:MM hoặc HH:MM:SS cho cả X và Y."
+        bus_type = "ca_hai"
+        if len(parts) == 4:
+            bus_type = parts[3].lower()
+            if bus_type not in ("thuong", "ca_hai"):
+                return "Loại xe không hợp lệ, dùng 'thuong' hoặc 'ca_hai' (mặc định nếu bỏ trống)."
+        update_item(item_id, path=self.state_file, depart_from=depart_from, depart_to=depart_to, bus_type=bus_type)
+        bus_label = "chỉ xe giường nằm (thường)" if bus_type == "thuong" else "cả xe thường lẫn Limousine"
+        return (
+            f"✅ [{item_id}] Chỉ xét chuyến khởi hành {depart_from}-{depart_to}, {bus_label}. "
+            f"Áp dụng cho cả /book và instant camp — chuyến ngoài khung/loại này bị bỏ qua dù còn chỗ."
+        )
 
     def cmd_list(self, rest: str) -> str:
         items = list_ticket_requests(self.state_file)
@@ -539,7 +570,9 @@ class Bot:
             from xeca_client import XecaClient
             client = XecaClient()
             plan = plan_booking(client, item["depart_date"], direction, item.get("quantity", 1),
-                                 item.get("pickup_name"), item.get("dropoff_name"))
+                                 item.get("pickup_name"), item.get("dropoff_name"),
+                                 depart_from=item.get("depart_from"), depart_to=item.get("depart_to"),
+                                 allow_limousine=item.get("bus_type", "ca_hai") != "thuong")
         except RuntimeError as e:
             return f"Chưa thể đặt: {e}"
 

@@ -338,6 +338,32 @@ def rank_bus_times(bus_times: list[dict]) -> list[dict]:
     return by_type
 
 
+def filter_bus_times(bus_times: list[dict], depart_from: str | None = None, depart_to: str | None = None,
+                      allow_limousine: bool = True) -> list[dict]:
+    """Restricts candidates to the user's desired DEPARTURE time-of-day window
+    (`depart_from`/`depart_to`, 'HH:MM' strings, inclusive) and/or bus type, applied BEFORE
+    ranking — a bus outside the window or of an excluded type is never picked even if it's
+    the only one with seats. `depart_from > depart_to` is treated as a window that wraps
+    past midnight (e.g. "22:00".."02:00" keeps departures >=22:00 OR <=02:00). Either bound
+    omitted/None means "no constraint" on that side; both omitted means no time filtering
+    at all. `allow_limousine=False` drops every non-`REGULAR_BUS_TYPE_NAME` candidate."""
+    result = []
+    for bt in bus_times:
+        if not allow_limousine and bt.get("bus_type_name") != REGULAR_BUS_TYPE_NAME:
+            continue
+        start_time = bt.get("start_time") or ""
+        if depart_from and depart_to and start_time:
+            in_window = (
+                depart_from <= start_time <= depart_to
+                if depart_from <= depart_to
+                else (start_time >= depart_from or start_time <= depart_to)
+            )
+            if not in_window:
+                continue
+        result.append(bt)
+    return result
+
+
 def select_preferred_bus_time(bus_times: list[dict]) -> dict | None:
     """Single best pick for simple status reporting (Phase 1 notifications) — the top of
     `rank_bus_times()`, preferring a candidate that still has seats. Real booking/camping

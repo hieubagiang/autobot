@@ -153,11 +153,23 @@ Khác với `/book`+`/confirm` (đặt 1 lần, cần xác nhận thủ công), 
   (`NoSeatsAvailableError`): luôn chủ động thử liên tục (15s/lần), không có giờ nào để
   chờ nên không deferred.
 
-**TODO (chưa làm — biết trước, set nhiều ngày trước sẽ sai):** `target_time` hiện chỉ nhận
-`HH:MM`/`HH:MM:SS`, luôn hiểu là "lần kế tiếp đồng hồ chỉ giờ này" — an toàn nếu set trong
-vòng 24h trước giờ thật, nhưng nếu set trước 2-3 ngày sẽ bị hiểu nhầm thành hôm nay/ngày mai.
-Cần thêm ngày tuỳ chọn, ví dụ `/instant <id> on 08:00 13/08/2026`, để `parse_target_time()`
-tính chính xác thời điểm thay vì suy ra "lần kế tiếp từ giờ hiện tại".
+**Đã fix (2026-08-10, sự cố thật trong lúc chạy)**: `target_time` từng lưu nguyên `HH:MM`
+và được `instant_lock_loop` parse lại "lần kế tiếp từ giờ hiện tại" mỗi khi thread khởi
+động lại — một lần deploy restart `xeca-bot.service` sau 08:00 khiến vài vé bị hiểu nhầm
+giờ mục tiêu thành **08:00 ngày mai**, bỏ mặc hold thật đã hết hạn suốt gần 1 ngày cho tới
+khi phát hiện thủ công. Giờ `target_time` lưu **thời điểm tuyệt đối** (resolve 1 lần lúc
+set qua `xeca_client.resolve_target_time()`), an toàn qua mọi lần restart. Cũng đã thêm
+ngày tuỳ chọn: `/instant <id> on 08:00 13/08/2026` — không cần chỉ set trong vòng 24h nữa.
+
+### Giới hạn khung giờ khởi hành + loại xe (`/setdeparttime`)
+`/setdeparttime <id> <X> <Y> [thuong|ca_hai]` (vd `/setdeparttime abc123 20:00 23:59 thuong`)
+giới hạn CHỈ xét chuyến khởi hành trong khung `[X,Y]` (qua nửa đêm cũng được, vd `22:00
+02:00`) và/hoặc loại xe (`thuong` = chỉ Xe giường nằm, `ca_hai` = mặc định, cho phép cả
+Limousine) — áp dụng cho **cả `/book` lẫn instant camp**, ở bước tìm chuyến
+(`find_best_available_bus`/`filter_bus_times` trong `xeca_client.py`) trước khi xếp hạng
+theo sở thích thường lệ. Một chuyến ngoài khung/loại này sẽ bị bỏ qua dù còn ghế trống —
+hữu ích khi bạn thà chờ tiếp còn hơn nhận nhầm 1 chuyến giờ không mong muốn (vd chuyến sáng
+sớm) chỉ vì nó tình cờ còn chỗ trước. Không set thì không giới hạn gì (hành vi cũ).
 
 Lưu ý: mỗi chu kỳ chỉ tạo 1 đơn chưa thanh toán (không tốn tiền cho tới khi bạn tự thanh
 toán), nhưng vẫn là hành động thật trên hệ thống Văn Minh (chiếm ghế tạm thời, tạo bản ghi
