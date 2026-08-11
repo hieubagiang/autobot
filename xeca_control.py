@@ -272,26 +272,24 @@ def instant_lock_loop(item_id: str, stop_event, notify,
                                      bus_type=item.get("bus_type", "ca_hai"))
             except SaleNotOpenError as e:
                 wait_seconds = next_poll_interval(INSTANT_RETRY_NOT_OPEN_SECONDS, 0, target_ts)
-                # Suppressed entirely while tight (would be every 0.4s otherwise) and
-                # throttled to once per INSTANT_NOT_OPEN_NOTIFY_INTERVAL_SECONDS the rest of
-                # the time — the retry itself still runs at `wait_seconds` regardless, this
-                # only throttles how often we tell the user about it (see that constant's
-                # comment for why: instant can be left on for hours before a known
-                # target_time, and notifying every single 60s cycle floods Telegram).
+                # "Still not open, nothing new" is expected/routine, not worth a Telegram
+                # ping — only logged (journalctl), never sent, per explicit user preference
+                # (2026-08-11: "vé nào có thì ping, thất bại thì kệ, tôi tự /list để xem").
+                # The retry itself still runs at `wait_seconds` regardless.
                 now = time.time()
                 if not tight_now and now - last_not_open_notify >= INSTANT_NOT_OPEN_NOTIFY_INTERVAL_SECONDS:
-                    _safe_notify(f"⏳ [instant {item_id}] {e} (đang thử lại mỗi {int(wait_seconds)}s)")
+                    print(f"[INFO] [instant {item_id}] {e} (đang thử lại mỗi {int(wait_seconds)}s)")
                     last_not_open_notify = now
                 if stop_event.wait(wait_seconds):
                     return
                 continue
             except NoSeatsAvailableError as e:
-                # Retry every INSTANT_RETRY_SOLD_OUT_SECONDS regardless (that's the race), but
-                # only *notify* about it every INSTANT_CAMP_NOTIFY_INTERVAL_SECONDS — see that
-                # constant's comment for why spamming a message per retry is actively harmful.
+                # Same as SaleNotOpenError above — "still camping, no seat yet" is routine,
+                # log-only, never pushed to Telegram. Retry itself still runs every
+                # INSTANT_RETRY_SOLD_OUT_SECONDS regardless of this log throttle.
                 now = time.time()
                 if now - last_camp_notify >= INSTANT_CAMP_NOTIFY_INTERVAL_SECONDS:
-                    _safe_notify(f"🏕️ [instant {item_id}] Đang camp — {e} (đang thử lại mỗi {INSTANT_RETRY_SOLD_OUT_SECONDS}s)")
+                    print(f"[INFO] [instant {item_id}] Đang camp — {e} (đang thử lại mỗi {INSTANT_RETRY_SOLD_OUT_SECONDS}s)")
                     last_camp_notify = now
                 if stop_event.wait(INSTANT_RETRY_SOLD_OUT_SECONDS):
                     return
