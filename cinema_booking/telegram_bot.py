@@ -1,7 +1,10 @@
 """Telegram control bot for the cinema-ticket watchlist.
 
 Long-polls Telegram getUpdates and only accepts commands from the whitelisted
-TELEGRAM_CHAT_ID (.env) — anyone else messaging the bot is ignored. Shape mirrors
+CINEMA_TELEGRAM_CHAT_ID (.env) — anyone else messaging the bot is ignored. Uses its OWN
+bot token (CINEMA_TELEGRAM_BOT_TOKEN), separate from xeca's TELEGRAM_BOT_TOKEN: two
+processes long-polling getUpdates with the same token collide (Telegram returns 409
+Conflict and drops updates unpredictably between them). Shape mirrors
 xeca_telegram_bot.py's Bot class, but stays independent of the unrelated bus-ticket
 modules — this module never imports from xeca_*.
 
@@ -315,10 +318,13 @@ def main():
     import os
 
     _load_env_file(".env")
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    # Deliberately its OWN bot (separate token from xeca's TELEGRAM_BOT_TOKEN), not a
+    # reused name: two long-poll getUpdates connections sharing one token cause Telegram
+    # to return 409 Conflict and drop updates unpredictably between the two processes.
+    token = os.environ.get("CINEMA_TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("CINEMA_TELEGRAM_CHAT_ID")
     if not token or not chat_id:
-        print("[ERROR] Thiếu TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID trong .env")
+        print("[ERROR] Thiếu CINEMA_TELEGRAM_BOT_TOKEN/CINEMA_TELEGRAM_CHAT_ID trong .env")
         return
     Bot(token, chat_id, state_file=DEFAULT_STATE_FILE).run()
 
