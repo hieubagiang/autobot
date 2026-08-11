@@ -162,10 +162,11 @@ set qua `xeca_client.resolve_target_time()`), an toàn qua mọi lần restart. 
 ngày tuỳ chọn: `/instant <id> on 08:00 13/08/2026` — không cần chỉ set trong vòng 24h nữa.
 
 ### Giới hạn khung giờ khởi hành + loại xe (`/setdeparttime`)
-`/setdeparttime <id> <X> <Y> [thuong|ca_hai]` (vd `/setdeparttime abc123 20:00 23:59 thuong`)
-giới hạn CHỈ xét chuyến khởi hành trong khung `[X,Y]` (qua nửa đêm cũng được, vd `22:00
-02:00`) và/hoặc loại xe (`thuong` = chỉ Xe giường nằm, `ca_hai` = mặc định, cho phép cả
-Limousine) — áp dụng cho **cả `/book` lẫn instant camp**, ở bước tìm chuyến
+`/setdeparttime <id> <X> <Y> [thuong|limousine|ca_hai]` (vd `/setdeparttime abc123 20:00
+23:59 limousine`) giới hạn CHỈ xét chuyến khởi hành trong khung `[X,Y]` (qua nửa đêm cũng
+được, vd `22:00 02:00`) và/hoặc loại xe — `thuong` = chỉ Xe giường nằm, `limousine` = chỉ
+Limousine (loại trừ xe thường), `ca_hai` = mặc định, cho phép cả 2 — áp dụng cho **cả
+`/book` lẫn instant camp**, ở bước tìm chuyến
 (`find_best_available_bus`/`filter_bus_times` trong `xeca_client.py`) trước khi xếp hạng
 theo sở thích thường lệ. Một chuyến ngoài khung/loại này sẽ bị bỏ qua dù còn ghế trống —
 hữu ích khi bạn thà chờ tiếp còn hơn nhận nhầm 1 chuyến giờ không mong muốn (vd chuyến sáng

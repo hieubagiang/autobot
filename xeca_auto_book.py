@@ -156,7 +156,7 @@ def _fetch_detail(client: XecaClient, depart_date: int, direction: dict, bus_tim
 
 def find_best_available_bus(client: XecaClient, depart_date: int, direction: dict, quantity: int = 1,
                              allow_middle_seats: bool = False, depart_from: str | None = None,
-                             depart_to: str | None = None, allow_limousine: bool = True):
+                             depart_to: str | None = None, bus_type: str = "ca_hai"):
     """Tries EVERY bus_time of the day, in `rank_bus_times()` priority order (regular bus >
     Limousine, tối > chiều > sáng, latest first within a band), and returns the first one
     whose sale is open AND has >= quantity seats matching the seat preference. This is what
@@ -166,10 +166,12 @@ def find_best_available_bus(client: XecaClient, depart_date: int, direction: dic
     `allow_middle_seats=True` (only ever passed from the instant-lock camping loop) also
     accepts middle-lane C/D seats as a last resort — see `select_seats()`.
 
-    `depart_from`/`depart_to`/`allow_limousine` (see `xeca_client.filter_bus_times()`)
+    `depart_from`/`depart_to`/`bus_type` (see `xeca_client.filter_bus_times()`)
     narrow the candidate pool to a desired departure time-of-day window and/or bus type
-    BEFORE ranking — set via /setdeparttime, so e.g. camping never locks a 05:00 bus just
-    because it's the only one with seats when the user only wants an evening departure.
+    ("thuong"/"limousine"/"ca_hai") BEFORE ranking — set via /setdeparttime, so e.g.
+    camping never locks a 05:00 bus just because it's the only one with seats when the
+    user only wants an evening departure, or never locks a regular bus when only
+    Limousine is wanted.
 
     Raises SaleNotOpenError if no candidate's sale has opened yet, or NoSeatsAvailableError
     if sale is open but nothing currently has enough matching seats (both retryable —
@@ -187,7 +189,7 @@ def find_best_available_bus(client: XecaClient, depart_date: int, direction: dic
     if not bus_times:
         raise NoSeatsAvailableError("Không có chuyến nào trong ngày.")
 
-    bus_times = filter_bus_times(bus_times, depart_from, depart_to, allow_limousine)
+    bus_times = filter_bus_times(bus_times, depart_from, depart_to, bus_type)
     if not bus_times:
         raise NoSeatsAvailableError(
             f"Không có chuyến nào khớp khung giờ khởi hành {depart_from or '?'}-{depart_to or '?'} "
@@ -248,10 +250,10 @@ def find_best_available_bus(client: XecaClient, depart_date: int, direction: dic
 def plan_booking(client: XecaClient, depart_date: int, direction: dict, quantity: int = 1,
                   pickup_override: str | None = None, dropoff_override: str | None = None,
                   allow_middle_seats: bool = False, depart_from: str | None = None,
-                  depart_to: str | None = None, allow_limousine: bool = True) -> dict:
+                  depart_to: str | None = None, bus_type: str = "ca_hai") -> dict:
     bus_time, seats = find_best_available_bus(
         client, depart_date, direction, quantity, allow_middle_seats,
-        depart_from=depart_from, depart_to=depart_to, allow_limousine=allow_limousine,
+        depart_from=depart_from, depart_to=depart_to, bus_type=bus_type,
     )
 
     pickup, dropoff, pickup_name, dropoff_name = resolve_points(
@@ -415,8 +417,8 @@ def main():
     parser.add_argument("--dropoff-name", default=None, help="Ghi đè điểm trả mặc định của chiều")
     parser.add_argument("--depart-from", default=None, help="Ad-hoc: chỉ xét chuyến khởi hành từ giờ này (HH:MM)")
     parser.add_argument("--depart-to", default=None, help="Ad-hoc: chỉ xét chuyến khởi hành tới giờ này (HH:MM)")
-    parser.add_argument("--bus-type", default="ca_hai", choices=["thuong", "ca_hai"],
-                         help="Ad-hoc: 'thuong' chỉ xe giường nằm, 'ca_hai' (mặc định) cho phép cả Limousine")
+    parser.add_argument("--bus-type", default="ca_hai", choices=["thuong", "limousine", "ca_hai"],
+                         help="Ad-hoc: 'thuong' chỉ xe giường nằm, 'limousine' chỉ Limousine, 'ca_hai' (mặc định) cho phép cả 2")
     parser.add_argument("--interval", type=int, default=300, help="Chu kỳ poll (giây) khi chưa mở bán")
     parser.add_argument("--jitter", type=int, default=30)
     parser.add_argument("--dry-run", action="store_true", help="Chỉ log kế hoạch, không giữ ghế/tạo đơn")
@@ -451,7 +453,7 @@ def main():
         dropoff_override = item.get("dropoff_name")
         depart_from = item.get("depart_from")
         depart_to = item.get("depart_to")
-        allow_limousine = item.get("bus_type", "ca_hai") != "thuong"
+        bus_type = item.get("bus_type", "ca_hai")
     else:
         if args.depart_date is None:
             print("[ERROR] Cần --item-id hoặc --depart-date")
@@ -463,14 +465,14 @@ def main():
         dropoff_override = args.dropoff_name
         depart_from = args.depart_from
         depart_to = args.depart_to
-        allow_limousine = args.bus_type != "thuong"
+        bus_type = args.bus_type
 
     client = XecaClient()
 
     while True:
         try:
             plan = plan_booking(client, depart_date, direction, quantity, pickup_override, dropoff_override,
-                                 depart_from=depart_from, depart_to=depart_to, allow_limousine=allow_limousine)
+                                 depart_from=depart_from, depart_to=depart_to, bus_type=bus_type)
             print("[PLAN]\n" + describe_plan(plan, direction))
 
             if args.dry_run:

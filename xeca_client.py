@@ -338,18 +338,27 @@ def rank_bus_times(bus_times: list[dict]) -> list[dict]:
     return by_type
 
 
+BUS_TYPE_FILTERS = ("thuong", "limousine", "ca_hai")
+
+
 def filter_bus_times(bus_times: list[dict], depart_from: str | None = None, depart_to: str | None = None,
-                      allow_limousine: bool = True) -> list[dict]:
+                      bus_type: str = "ca_hai") -> list[dict]:
     """Restricts candidates to the user's desired DEPARTURE time-of-day window
     (`depart_from`/`depart_to`, 'HH:MM' strings, inclusive) and/or bus type, applied BEFORE
     ranking — a bus outside the window or of an excluded type is never picked even if it's
     the only one with seats. `depart_from > depart_to` is treated as a window that wraps
     past midnight (e.g. "22:00".."02:00" keeps departures >=22:00 OR <=02:00). Either bound
     omitted/None means "no constraint" on that side; both omitted means no time filtering
-    at all. `allow_limousine=False` drops every non-`REGULAR_BUS_TYPE_NAME` candidate."""
+    at all. `bus_type` (one of BUS_TYPE_FILTERS): "thuong" keeps only
+    `REGULAR_BUS_TYPE_NAME`, "limousine" keeps only NON-regular (there's no separate
+    "Limousine ..." constant — anything not the regular type name counts), "ca_hai"
+    (default) keeps both."""
     result = []
     for bt in bus_times:
-        if not allow_limousine and bt.get("bus_type_name") != REGULAR_BUS_TYPE_NAME:
+        is_regular = bt.get("bus_type_name") == REGULAR_BUS_TYPE_NAME
+        if bus_type == "thuong" and not is_regular:
+            continue
+        if bus_type == "limousine" and is_regular:
             continue
         start_time = bt.get("start_time") or ""
         if depart_from and depart_to and start_time:
