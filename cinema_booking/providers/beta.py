@@ -248,6 +248,14 @@ class BetaProvider(CinemaProvider):
                 # becomes inaccessible (ERR_FILE_NOT_FOUND) the next time the profile is
                 # opened with the default extensions-disabled flags.
                 ignore_default_args=["--disable-extensions"],
+                # Facebook's OAuth consent screen showed inconsistent behavior during
+                # the manual login flow (identical click sometimes completed the
+                # handshake, sometimes silently didn't) -- possibly Meta's own
+                # bot-detection reacting to Chromium's default automation fingerprint
+                # (navigator.webdriver, etc). This is the standard Selenium/Puppeteer
+                # mitigation flag; cheap to add, no behavior change if it isn't the
+                # actual cause.
+                args=["--disable-blink-features=AutomationControlled"],
             )
 
         if self._page_obj is not None and self._page_created_at is not None:

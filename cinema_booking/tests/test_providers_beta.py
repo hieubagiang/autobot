@@ -942,7 +942,7 @@ class _FakePlaywrightInstance:
         self.chromium = self
         self.stopped = False
 
-    def launch_persistent_context(self, profile_dir, headless=False, ignore_default_args=None):
+    def launch_persistent_context(self, profile_dir, headless=False, ignore_default_args=None, args=None):
         ctx = _FakeContext(f"ctx{len(self._contexts_created)}")
         self._contexts_created.append(ctx)
         return ctx
