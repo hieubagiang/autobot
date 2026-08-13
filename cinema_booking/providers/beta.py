@@ -233,6 +233,13 @@ class BetaProvider(CinemaProvider):
             self._playwright = sync_playwright().start()
             self._context = self._playwright.chromium.launch_persistent_context(
                 self.profile_dir, headless=False,
+                # Playwright disables extensions by default. Allowing them lets a human
+                # use a normal browser extension (e.g. a cookie-import tool) during the
+                # one-time manual Facebook login this provider's session-reuse design
+                # requires -- without this, an extension installed under one launch
+                # becomes inaccessible (ERR_FILE_NOT_FOUND) the next time the profile is
+                # opened with the default extensions-disabled flags.
+                ignore_default_args=["--disable-extensions"],
             )
             self._page_obj = self._context.pages[0] if self._context.pages else self._context.new_page()
         return self._page_obj
