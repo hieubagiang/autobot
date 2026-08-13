@@ -901,15 +901,24 @@ def test_get_seat_map_notifies_when_parse_returns_all_empty_seat_map(monkeypatch
 
 
 # ---------------------------------------------------------------------------
-# Finding N9: a long-running Chrome page accumulates memory over hours of
+# Finding N9: a long-running Chrome PAGE accumulates memory over hours of
 # continuous camp-loop polling and eventually gets OOM-killed. _page() must
-# recycle (close + relaunch) the browser once it's older than PAGE_MAX_AGE.
+# recycle (close + reopen) just the page/tab once it's older than
+# PAGE_MAX_AGE -- the CONTEXT (and the persistent profile/cookies behind it)
+# must be launched only once and never closed by this recycling, since Beta's
+# own login state lives in a session-only cookie that does not survive a
+# context relaunch (an earlier version of this fix closed the context too,
+# which silently logged the bot out on every recycle).
 # ---------------------------------------------------------------------------
 
 
 class _FakePageObj:
     def __init__(self, name):
         self.name = name
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
 
 class _FakeContext:
@@ -917,9 +926,11 @@ class _FakeContext:
         self.name = name
         self.pages = []
         self.closed = False
+        self._page_count = 0
 
     def new_page(self):
-        return _FakePageObj(f"{self.name}-page")
+        self._page_count += 1
+        return _FakePageObj(f"{self.name}-page{self._page_count}")
 
     def close(self):
         self.closed = True
@@ -948,7 +959,10 @@ class _FakeSyncPlaywright:
         return _FakePlaywrightInstance(self._contexts_created)
 
 
-def test_page_recycles_after_max_age(monkeypatch):
+def test_page_recycles_without_closing_the_context(monkeypatch):
+    # The context (where Beta's session-only login cookie lives) must be launched
+    # exactly once and survive every page recycle -- closing it would silently log the
+    # bot out every PAGE_MAX_AGE, which is exactly what happened in production.
     from datetime import datetime, timedelta
 
     from cinema_booking.providers.beta import BetaProvider
@@ -963,14 +977,16 @@ def test_page_recycles_after_max_age(monkeypatch):
     page1 = provider._page()
     assert len(contexts) == 1
     assert contexts[0].closed is False
+    assert page1.closed is False
 
     # Simulate the page having aged past the recycle threshold -- a real camp
     # loop would only reach this after hours of continuous polling.
     provider._page_created_at = datetime.now() - timedelta(minutes=31)
 
     page2 = provider._page()
-    assert len(contexts) == 2
-    assert contexts[0].closed is True
+    assert len(contexts) == 1  # NOT relaunched -- same context reused
+    assert contexts[0].closed is False  # NOT closed -- this is the whole point of N9's fix
+    assert page1.closed is True  # the stale PAGE was closed
     assert page1 is not page2
 
 
@@ -988,42 +1004,30 @@ def test_page_does_not_recycle_before_max_age(monkeypatch):
     page2 = provider._page()
 
     assert len(contexts) == 1
-    assert contexts[0].closed is False
+    assert page1.closed is False
     assert page1 is page2
 
 
-def test_page_recycle_notifies_but_still_relaunches_when_close_fails(monkeypatch):
+def test_page_recycle_notifies_but_still_opens_new_page_when_close_fails(monkeypatch):
     from datetime import datetime, timedelta
 
     from cinema_booking.providers.beta import BetaProvider
 
     contexts = []
-
-    class _BrokenCloseContext(_FakeContext):
-        def close(self):
-            raise RuntimeError("simulated close failure")
-
-    class _FakePlaywrightInstanceBrokenFirst(_FakePlaywrightInstance):
-        def launch_persistent_context(self, profile_dir, headless=False, ignore_default_args=None):
-            if not self._contexts_created:
-                ctx = _BrokenCloseContext("ctx0")
-            else:
-                ctx = _FakeContext(f"ctx{len(self._contexts_created)}")
-            self._contexts_created.append(ctx)
-            return ctx
-
     monkeypatch.setattr(
         "cinema_booking.providers.beta.sync_playwright",
-        lambda: type("S", (), {"start": lambda self: _FakePlaywrightInstanceBrokenFirst(contexts)})(),
+        lambda: _FakeSyncPlaywright(contexts),
     )
     notifications = []
     provider = BetaProvider(notify=notifications.append)
 
     page1 = provider._page()
+    page1.close = lambda: (_ for _ in ()).throw(RuntimeError("simulated close failure"))
     provider._page_created_at = datetime.now() - timedelta(minutes=31)
+
     page2 = provider._page()
 
-    assert len(contexts) == 2
+    assert len(contexts) == 1  # context still untouched despite the page-close failure
     assert page1 is not page2
     assert len(notifications) == 1
 

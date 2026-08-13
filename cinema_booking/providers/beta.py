@@ -237,11 +237,7 @@ class BetaProvider(CinemaProvider):
         self._lock = threading.Lock()
 
     def _page(self):
-        if self._page_obj is not None and self._page_created_at is not None:
-            if datetime.now() - self._page_created_at > PAGE_MAX_AGE:
-                self._recycle_page()
-
-        if self._page_obj is None:
+        if self._context is None:
             self._playwright = sync_playwright().start()
             self._context = self._playwright.chromium.launch_persistent_context(
                 self.profile_dir, headless=False,
@@ -253,26 +249,34 @@ class BetaProvider(CinemaProvider):
                 # opened with the default extensions-disabled flags.
                 ignore_default_args=["--disable-extensions"],
             )
+
+        if self._page_obj is not None and self._page_created_at is not None:
+            if datetime.now() - self._page_created_at > PAGE_MAX_AGE:
+                self._recycle_page()
+
+        if self._page_obj is None:
             self._page_obj = self._context.pages[0] if self._context.pages else self._context.new_page()
             self._page_created_at = datetime.now()
         return self._page_obj
 
     def _recycle_page(self) -> None:
-        """Tear down the current page/context/browser (finding N9) so the next _page()
-        call starts a fresh one, capping how much memory one long-lived Chrome session
-        can accumulate across hours of continuous camp-loop polling. Best-effort: a
-        failure while closing the stale context must not prevent starting a new one."""
+        """Close and replace just the PAGE/tab (finding N9), never the CONTEXT.
+
+        A page/tab's renderer process is what accumulates memory over hours of
+        continuous goto()-ing; closing and reopening it caps that. The context (and the
+        Chrome persistent profile behind it) must stay alive across recycles: Beta's own
+        login state lives in a session-only cookie (no persistent auth cookie exists --
+        confirmed by inspecting the profile's cookie store), so closing the CONTEXT (as
+        an earlier version of this method did) discards that cookie and silently logs
+        the bot out every PAGE_MAX_AGE, exactly the "chưa đăng nhập" loop this was
+        supposed to prevent, not cause. Best-effort: a failure while closing the stale
+        page must not prevent opening a new one.
+        """
         try:
-            self._context.close()
+            self._page_obj.close()
         except Exception as exc:
-            self.notify(f"[beta] failed to close stale browser context during recycle "
+            self.notify(f"[beta] failed to close stale browser page during recycle "
                         f"(continuing to relaunch anyway): {exc}")
-        try:
-            self._playwright.stop()
-        except Exception:
-            pass
-        self._playwright = None
-        self._context = None
         self._page_obj = None
         self._page_created_at = None
 
