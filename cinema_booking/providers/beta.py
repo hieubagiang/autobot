@@ -32,6 +32,13 @@ HOLD_MINUTES = 10
 # Cloudflare-fronted page on every single poll) against staleness.
 HOME_HTML_CACHE_TTL = timedelta(minutes=5)
 
+# A long-running camp loop keeps calling page.goto() on the SAME page for hours; Chrome's
+# per-navigation memory (JS heap, DOM, cached resources) accumulates over that time and
+# was observed to OOM-kill the whole bot process after ~3 hours of continuous polling.
+# Recycling the page/context periodically caps how much a single Chrome session can
+# accumulate before it's replaced with a fresh one (finding N9).
+PAGE_MAX_AGE = timedelta(minutes=30)
+
 # Shared by SelectSeat (lock) and ReturnSeat (release) -- identical payload shape
 # ({"aData": [seatIndex, showId, customerId]}, three strings) and identical response
 # shape ({"d": "<nested JSON string>"}), just opposite meaning of IsYourSeat on success.
@@ -210,6 +217,7 @@ class BetaProvider(CinemaProvider):
         self._playwright = None
         self._context = None
         self._page_obj = None
+        self._page_created_at: datetime | None = None
 
         # Cache of home.htm's raw HTML (finding I4, TTL added for finding N2). Without a
         # TTL, list_cinemas()/_find_film_id() would only ever fetch home.htm once per
@@ -229,6 +237,10 @@ class BetaProvider(CinemaProvider):
         self._lock = threading.Lock()
 
     def _page(self):
+        if self._page_obj is not None and self._page_created_at is not None:
+            if datetime.now() - self._page_created_at > PAGE_MAX_AGE:
+                self._recycle_page()
+
         if self._page_obj is None:
             self._playwright = sync_playwright().start()
             self._context = self._playwright.chromium.launch_persistent_context(
@@ -242,7 +254,27 @@ class BetaProvider(CinemaProvider):
                 ignore_default_args=["--disable-extensions"],
             )
             self._page_obj = self._context.pages[0] if self._context.pages else self._context.new_page()
+            self._page_created_at = datetime.now()
         return self._page_obj
+
+    def _recycle_page(self) -> None:
+        """Tear down the current page/context/browser (finding N9) so the next _page()
+        call starts a fresh one, capping how much memory one long-lived Chrome session
+        can accumulate across hours of continuous camp-loop polling. Best-effort: a
+        failure while closing the stale context must not prevent starting a new one."""
+        try:
+            self._context.close()
+        except Exception as exc:
+            self.notify(f"[beta] failed to close stale browser context during recycle "
+                        f"(continuing to relaunch anyway): {exc}")
+        try:
+            self._playwright.stop()
+        except Exception:
+            pass
+        self._playwright = None
+        self._context = None
+        self._page_obj = None
+        self._page_created_at = None
 
     def is_logged_in(self) -> bool:
         with self._lock:

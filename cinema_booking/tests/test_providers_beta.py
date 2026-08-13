@@ -900,6 +900,134 @@ def test_get_seat_map_notifies_when_parse_returns_all_empty_seat_map(monkeypatch
     assert "rỗng" in notifications[0]
 
 
+# ---------------------------------------------------------------------------
+# Finding N9: a long-running Chrome page accumulates memory over hours of
+# continuous camp-loop polling and eventually gets OOM-killed. _page() must
+# recycle (close + relaunch) the browser once it's older than PAGE_MAX_AGE.
+# ---------------------------------------------------------------------------
+
+
+class _FakePageObj:
+    def __init__(self, name):
+        self.name = name
+
+
+class _FakeContext:
+    def __init__(self, name):
+        self.name = name
+        self.pages = []
+        self.closed = False
+
+    def new_page(self):
+        return _FakePageObj(f"{self.name}-page")
+
+    def close(self):
+        self.closed = True
+
+
+class _FakePlaywrightInstance:
+    def __init__(self, contexts_created):
+        self._contexts_created = contexts_created
+        self.chromium = self
+        self.stopped = False
+
+    def launch_persistent_context(self, profile_dir, headless=False, ignore_default_args=None):
+        ctx = _FakeContext(f"ctx{len(self._contexts_created)}")
+        self._contexts_created.append(ctx)
+        return ctx
+
+    def stop(self):
+        self.stopped = True
+
+
+class _FakeSyncPlaywright:
+    def __init__(self, contexts_created):
+        self._contexts_created = contexts_created
+
+    def start(self):
+        return _FakePlaywrightInstance(self._contexts_created)
+
+
+def test_page_recycles_after_max_age(monkeypatch):
+    from datetime import datetime, timedelta
+
+    from cinema_booking.providers.beta import BetaProvider
+
+    contexts = []
+    monkeypatch.setattr(
+        "cinema_booking.providers.beta.sync_playwright",
+        lambda: _FakeSyncPlaywright(contexts),
+    )
+    provider = BetaProvider()
+
+    page1 = provider._page()
+    assert len(contexts) == 1
+    assert contexts[0].closed is False
+
+    # Simulate the page having aged past the recycle threshold -- a real camp
+    # loop would only reach this after hours of continuous polling.
+    provider._page_created_at = datetime.now() - timedelta(minutes=31)
+
+    page2 = provider._page()
+    assert len(contexts) == 2
+    assert contexts[0].closed is True
+    assert page1 is not page2
+
+
+def test_page_does_not_recycle_before_max_age(monkeypatch):
+    from cinema_booking.providers.beta import BetaProvider
+
+    contexts = []
+    monkeypatch.setattr(
+        "cinema_booking.providers.beta.sync_playwright",
+        lambda: _FakeSyncPlaywright(contexts),
+    )
+    provider = BetaProvider()
+
+    page1 = provider._page()
+    page2 = provider._page()
+
+    assert len(contexts) == 1
+    assert contexts[0].closed is False
+    assert page1 is page2
+
+
+def test_page_recycle_notifies_but_still_relaunches_when_close_fails(monkeypatch):
+    from datetime import datetime, timedelta
+
+    from cinema_booking.providers.beta import BetaProvider
+
+    contexts = []
+
+    class _BrokenCloseContext(_FakeContext):
+        def close(self):
+            raise RuntimeError("simulated close failure")
+
+    class _FakePlaywrightInstanceBrokenFirst(_FakePlaywrightInstance):
+        def launch_persistent_context(self, profile_dir, headless=False, ignore_default_args=None):
+            if not self._contexts_created:
+                ctx = _BrokenCloseContext("ctx0")
+            else:
+                ctx = _FakeContext(f"ctx{len(self._contexts_created)}")
+            self._contexts_created.append(ctx)
+            return ctx
+
+    monkeypatch.setattr(
+        "cinema_booking.providers.beta.sync_playwright",
+        lambda: type("S", (), {"start": lambda self: _FakePlaywrightInstanceBrokenFirst(contexts)})(),
+    )
+    notifications = []
+    provider = BetaProvider(notify=notifications.append)
+
+    page1 = provider._page()
+    provider._page_created_at = datetime.now() - timedelta(minutes=31)
+    page2 = provider._page()
+
+    assert len(contexts) == 2
+    assert page1 is not page2
+    assert len(notifications) == 1
+
+
 def test_get_seat_map_does_not_notify_when_seat_map_has_seats(
     beta_home_html, beta_showtimes_json, beta_seat_map_html, monkeypatch,
 ):
