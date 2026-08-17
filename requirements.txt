@@ -3,3 +3,4 @@ selenium
 requests
 beautifulsoup4
 playwright
+telethon
