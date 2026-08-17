@@ -128,3 +128,39 @@ def _parse_entry_filled(text: str) -> dict | None:
         "period": None,
         "entry_price": float(m.group("entry_price")),
     }
+
+
+_ANALYSIS_HEADER_RE = re.compile(r"^\s*([A-Za-z0-9]{2,10})\s+analysis:", re.IGNORECASE)
+
+# Small seed list -- expand as new coin names show up in real commentary (see spec's
+# "Rủi ro / điểm còn mở"). A miss just means coins=[] for that message, not an error.
+_COIN_ALIASES = {
+    "bitcoin": "BTC",
+    "ethereum": "ETH",
+    "solana": "SOL",
+    "btc": "BTC",
+    "eth": "ETH",
+}
+
+
+def extract_commentary_coins(text: str) -> list:
+    coins = []
+    m = _ANALYSIS_HEADER_RE.match(text)
+    if m:
+        coins.append(m.group(1).upper())
+    lowered = text.lower()
+    for alias, ticker in _COIN_ALIASES.items():
+        if alias in lowered and ticker not in coins:
+            coins.append(ticker)
+    return coins
+
+
+def parse_message(text: str, channel_kind: str = "signal") -> dict:
+    text = text.strip()
+    for parse_fn in (_parse_scalp, _parse_structured, _parse_tp_hit, _parse_entry_filled):
+        result = parse_fn(text)
+        if result is not None:
+            return result
+    if channel_kind == "commentary":
+        return {"type": "commentary", "coins": extract_commentary_coins(text), "raw": text}
+    return {"type": "unknown", "raw": text}

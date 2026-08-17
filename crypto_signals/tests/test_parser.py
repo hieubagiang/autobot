@@ -1,4 +1,4 @@
-from crypto_signals.parser import normalize_coin, _parse_scalp, _parse_structured, _parse_tp_hit, _parse_entry_filled
+from crypto_signals.parser import normalize_coin, _parse_scalp, _parse_structured, _parse_tp_hit, _parse_entry_filled, extract_commentary_coins, parse_message
 
 SCALP_UNI = (
     "✅ SCALP TRADE - UNI 🏮 TYPE - LONG 👉 ENTRY - $3.28 - $3.22 👉 TARGET - $3.30, $3.32, "
@@ -117,3 +117,53 @@ def test_parse_entry_filled():
 def test_parse_entry_filled_returns_none_for_other_text():
     assert _parse_entry_filled(TP_HIT_TEXT) is None
     assert _parse_entry_filled(STRUCTURED_ETH) is None
+
+
+ZK_ANALYSIS = (
+    "ZK analysis:\n"
+    "Price is breaking out of the falling wedge pattern upward. We will open a long "
+    "position after confirmation. We expect a significant upward move once the breakout "
+    "is confirmed.\n"
+    "Key Level to Hold: $0.007700"
+)
+BITCOIN_COMMENTARY = (
+    "Bitcoin started the week with a strong green candle. I expect this upward movement "
+    "to continue when the US market opens."
+)
+NO_COIN_COMMENTARY = "The market feels quiet today, nothing notable to report right now."
+
+
+def test_extract_commentary_coins_from_analysis_header():
+    assert extract_commentary_coins(ZK_ANALYSIS) == ["ZK"]
+
+
+def test_extract_commentary_coins_from_known_alias():
+    assert extract_commentary_coins(BITCOIN_COMMENTARY) == ["BTC"]
+
+
+def test_extract_commentary_coins_empty_when_nothing_found():
+    assert extract_commentary_coins(NO_COIN_COMMENTARY) == []
+
+
+def test_parse_message_dispatches_to_scalp():
+    assert parse_message(SCALP_UNI, channel_kind="signal")["type"] == "signal"
+
+
+def test_parse_message_dispatches_to_structured():
+    assert parse_message(STRUCTURED_ETH, channel_kind="signal")["type"] == "signal"
+
+
+def test_parse_message_dispatches_to_update():
+    result = parse_message(TP_HIT_TEXT, channel_kind="signal")
+    assert result["type"] == "update"
+    assert result["kind"] == "tp_hit"
+
+
+def test_parse_message_commentary_channel_falls_back_to_commentary():
+    result = parse_message(ZK_ANALYSIS, channel_kind="commentary")
+    assert result == {"type": "commentary", "coins": ["ZK"], "raw": ZK_ANALYSIS}
+
+
+def test_parse_message_signal_channel_falls_back_to_unknown():
+    garbage = "just a random sentence with no known structure"
+    assert parse_message(garbage, channel_kind="signal") == {"type": "unknown", "raw": garbage}
