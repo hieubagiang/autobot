@@ -20,6 +20,7 @@ import requests
 
 from . import control
 from .env import load_env_file
+from .format import fmt_num
 from .telegram_api import send_message
 
 LONG_POLL_TIMEOUT = 25
@@ -36,11 +37,12 @@ def format_open_signals(signals: list) -> str:
         return "Không có signal nào đang mở."
     lines = []
     for s in signals:
-        entry_str = " - ".join(str(v) for v in s["entry"])
-        targets_str = ", ".join(str(v) for v in s["targets"])
+        entry_str = " - ".join(fmt_num(v) for v in s["entry"])
+        targets_str = ", ".join(fmt_num(v) for v in s["targets"])
+        hits_str = ", ".join(f"TP{h['target_index']}" for h in s["hits"]) or "none"
         lines.append(
             f"[{s['channel']}] {s['coin']} {s['direction']}\n"
-            f"  Entry: {entry_str} | Targets: {targets_str} | Hits: {len(s['hits'])}"
+            f"  Entry: {entry_str} | Targets: {targets_str} | Hits: {hits_str}"
         )
     return "\n\n".join(lines)
 
@@ -92,7 +94,15 @@ class Bot:
                     traceback.print_exc()
                     reply = f"❌ Lỗi: {e}"
                 if reply:
-                    self.send(reply)
+                    try:
+                        self.send(reply)
+                    except Exception:
+                        # send_message() raises on HTTP errors (raise_for_status()), and
+                        # Telegram rejects messages over 4096 chars -- an unguarded raise
+                        # here would crash the whole loop; systemd restarts it, but the
+                        # getUpdates offset resets, so the same command gets redelivered
+                        # and crash-loops forever. Log and move on instead.
+                        traceback.print_exc()
 
     def dispatch(self, text: str) -> str:
         parts = text.split(maxsplit=1)
@@ -138,12 +148,23 @@ class Bot:
         return format_open_signals(control.list_open_signals(self.state_file))
 
     def cmd_status(self) -> str:
-        return f"crypto-signals-listen.service: {control.service_is_active()}"
+        channels = control.list_channels(self.state_file)
+        open_signals = control.list_open_signals(self.state_file)
+        return (
+            f"Trạng thái {control.SERVICE_NAME}: {control.service_is_active()}\n"
+            f"Số kênh đang nghe: {len(channels)}\n"
+            f"Số signal đang mở: {len(open_signals)}"
+        )
 
     def cmd_logs(self, rest: str) -> str:
         n = int(rest.strip()) if rest.strip().isdigit() else 20
         logs = control.get_logs(n)
-        return logs if logs else "(không có log)"
+        if not logs:
+            return "(không có log)"
+        # journalctl output for a large n can easily exceed Telegram's 4096-char message
+        # limit -- truncate so a raw send_message() raise_for_status() can't recur here
+        # even without the try/except guard around self.send() in run().
+        return logs[-4000:]
 
     def cmd_help(self) -> str:
         return (

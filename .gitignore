@@ -24,3 +24,11 @@ data/registrants.json
 
 # TQTT field-key mapping cache (runtime, re-derived from the live frontend bundle each run)
 data/tqtt_field_keys_cache.json
+
+# crypto_signals runtime state + Telethon session (differs per-environment, not source;
+# the .session file is a live credential -- never commit it)
+crypto_signals_state.json
+crypto_signals_state.json.tmp
+crypto_signals_state.json.lock
+crypto_signals_session.session
+crypto_signals_session.session-journal

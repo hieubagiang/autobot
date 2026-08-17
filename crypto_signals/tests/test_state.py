@@ -89,9 +89,36 @@ def test_append_hit_updates_status_and_hits(state_path):
     signal = state.add_signal(channel="c1", coin="UNI/USDT", direction="LONG", entry=[1],
                                targets=[2], targets_plus=False, sl=0.5, leverage="10x",
                                scalp=False, path=state_path)
-    hit = {"target_index": 1, "profit_pct": 36.5854, "period": "5 hr 26 min", "at": "now"}
+    hit = {"target_index": 1, "profit_pct": 36.5854, "period": "5 hr 26 min", "at": "now",
+           "update_kind": "tp_hit"}
 
     updated = state.append_hit(signal["id"], hit, state_path)
     assert updated["status"] == "tp_hit"
     assert updated["hits"] == [hit]
     assert state.append_hit("does-not-exist", hit, state_path) is None
+
+
+def test_append_hit_entry_filled_leaves_status_open(state_path):
+    # Regression: an entry_filled update means the entry price was hit (position opened),
+    # NOT that a take-profit target was hit -- append_hit() must not force status to
+    # "tp_hit" for this kind of update.
+    signal = state.add_signal(channel="c1", coin="UNI/USDT", direction="LONG", entry=[1],
+                               targets=[2], targets_plus=False, sl=0.5, leverage="10x",
+                               scalp=False, path=state_path)
+    hit = {"target_index": 1, "profit_pct": None, "period": None, "entry_price": 3.28,
+           "update_kind": "entry_filled", "at": "now"}
+
+    updated = state.append_hit(signal["id"], hit, state_path)
+    assert updated["status"] == "open"
+    assert updated["hits"] == [hit]
+
+
+def test_append_hit_tp_hit_still_sets_status(state_path):
+    signal = state.add_signal(channel="c1", coin="UNI/USDT", direction="LONG", entry=[1],
+                               targets=[2], targets_plus=False, sl=0.5, leverage="10x",
+                               scalp=False, path=state_path)
+    hit = {"target_index": 1, "profit_pct": 36.5854, "period": "5 hr 26 min",
+           "update_kind": "tp_hit", "at": "now"}
+
+    updated = state.append_hit(signal["id"], hit, state_path)
+    assert updated["status"] == "tp_hit"

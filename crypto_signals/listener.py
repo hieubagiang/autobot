@@ -56,7 +56,25 @@ async def run() -> None:
         username = getattr(chat, "username", None)
         if username not in channels_by_username:
             return
-        text = route_message(event.raw_text, username, channels_by_username[username])
+        if not (event.raw_text or "").strip():
+            # Media-only post (e.g. a chart screenshot) with no caption -- nothing to parse,
+            # skip instead of relaying a confusing "unrecognized format" warning with an
+            # empty body.
+            return
+        try:
+            text = route_message(event.raw_text, username, channels_by_username[username])
+        except Exception as e:
+            # route_message() touches the state file (file lock, JSON load/save) and can
+            # raise (TimeoutError from lock contention, JSONDecodeError from a corrupted
+            # state file, OSError). Telethon just logs/swallows handler exceptions and moves
+            # on, so without this the alert would be silently dropped -- exactly what the
+            # unknown-type fallback design exists to prevent. Surface it in Telegram too.
+            print(f"[LISTENER] route_message thất bại: {e}")
+            try:
+                send_message(bot_token, chat_id, f"⚠️ [{username}] Lỗi xử lý tin nhắn: {e}")
+            except Exception as e2:
+                print(f"[LISTENER] Gửi fallback Telegram thất bại: {e2}")
+            return
         try:
             send_message(bot_token, chat_id, text)
         except Exception as e:

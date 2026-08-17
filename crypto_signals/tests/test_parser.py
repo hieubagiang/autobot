@@ -191,3 +191,13 @@ def test_extract_commentary_coins_matches_whole_word_ethereum():
     # "ethereum" as whole word should match
     text = "Ethereum is consolidating before a major move."
     assert extract_commentary_coins(text) == ["ETH"]
+
+
+def test_parse_message_never_raises_on_malformed_numeric_capture():
+    # Regression: the `sl` group [\d.,]+ can match a bare "," with no actual digit, and
+    # NUM_RE.search(...).group() on that then raises AttributeError on None. parse_message()
+    # must never raise -- a malformed candidate parse should just fall through to "unknown".
+    malformed = (
+        "SCALP TRADE - X TYPE - LONG ENTRY - 1 👉 TARGET - 2 👉 SL - , 🚨LEVERAGE - 5x"
+    )
+    assert parse_message(malformed, channel_kind="signal") == {"type": "unknown", "raw": malformed}

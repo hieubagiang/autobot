@@ -32,7 +32,6 @@ lần duy nhất, y hệt `telegram-tools/telegram_bot_episode_grabber.py`:
 python -c "
 from telethon.sync import TelegramClient
 import os
-os.environ.setdefault('X', '')  # no-op, chỉ để import không lỗi nếu .env chưa load
 from crypto_signals.env import load_env_file
 load_env_file('.env')
 client = TelegramClient('crypto_signals_session', int(os.environ['TELEGRAM_API_ID']), os.environ['TELEGRAM_API_HASH'])
@@ -127,3 +126,17 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 ```
+
+### Setup lần đầu (bắt buộc trước khi `deploy.sh` restart được 2 service này)
+
+Sau khi tạo 2 file unit ở trên (và đã scp `crypto_signals_session.session` thật lên server —
+xem bước đăng nhập Telethon phía trên), chạy một lần duy nhất để nạp + bật service:
+
+```bash
+ssh root@hieuit.top "systemctl daemon-reload && systemctl enable --now crypto-signals-listen crypto-signals-bot"
+```
+
+Bỏ qua bước này thì lần đầu tiên bạn thêm `TELEGRAM_API_ID=` vào `.env` trên server và chạy
+`deploy.sh`, lệnh `systemctl restart crypto-signals-listen.service crypto-signals-bot.service`
+trong guard restart sẽ thất bại vì unit chưa được cài/enable — và vì khối ssh của `deploy.sh`
+chạy dưới `set -e`, cả deploy sẽ dừng giữa chừng trước khi in dòng trạng thái cuối cùng.

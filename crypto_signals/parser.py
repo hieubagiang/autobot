@@ -158,7 +158,14 @@ def extract_commentary_coins(text: str) -> list[str]:
 def parse_message(text: str, channel_kind: str = "signal") -> dict:
     text = text.strip()
     for parse_fn in (_parse_scalp, _parse_structured, _parse_tp_hit, _parse_entry_filled):
-        result = parse_fn(text)
+        try:
+            result = parse_fn(text)
+        except Exception:
+            # A malformed numeric capture (bare "," matched by a greedy [\d.,]+ group, or
+            # multi-dot garbage failing float()) means this template didn't actually match --
+            # fall through to the next candidate parser (or commentary/unknown) instead of
+            # ever raising out of parse_message(), which must never raise (see module docstring).
+            continue
         if result is not None:
             return result
     if channel_kind == "commentary":

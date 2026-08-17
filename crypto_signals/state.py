@@ -150,7 +150,8 @@ def append_hit(signal_id: str, hit: dict, path: str = DEFAULT_STATE_FILE) -> dic
         for s in st["signals"]:
             if s["id"] == signal_id:
                 s["hits"].append(hit)
-                s["status"] = "tp_hit"
+                if hit.get("update_kind") == "tp_hit":
+                    s["status"] = "tp_hit"
                 s["last_update_at"] = _now_iso()
                 save_state(st, path)
                 return s

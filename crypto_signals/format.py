@@ -2,14 +2,14 @@
 sent to Telegram. No I/O here -- listener.py owns the actual send call."""
 
 
-def _fmt_num(v: float) -> str:
-    text = f"{v:.10f}".rstrip("0").rstrip(".")
+def fmt_num(v: float) -> str:
+    text = f"{v:.12f}".rstrip("0").rstrip(".")
     return text if text else "0"
 
 
 def format_new_signal(channel: str, signal: dict) -> str:
-    entry_str = " - ".join(_fmt_num(v) for v in signal["entry"])
-    targets_str = ", ".join(_fmt_num(v) for v in signal["targets"])
+    entry_str = " - ".join(fmt_num(v) for v in signal["entry"])
+    targets_str = ", ".join(fmt_num(v) for v in signal["targets"])
     if signal.get("targets_plus"):
         targets_str += "+"
     scalp_label = " (scalp)" if signal.get("scalp") else ""
@@ -17,7 +17,7 @@ def format_new_signal(channel: str, signal: dict) -> str:
         f"🆕 [{channel}] {signal['coin']} — {signal['direction']}{scalp_label}\n"
         f"Entry: {entry_str}\n"
         f"Targets: {targets_str}\n"
-        f"SL: {_fmt_num(signal['sl'])}\n"
+        f"SL: {fmt_num(signal['sl'])}\n"
         f"Leverage: {signal['leverage']}"
     )
 
@@ -32,7 +32,7 @@ def format_update_matched(channel: str, signal: dict, update: dict) -> str:
     else:
         detail = f"Entry {update['target_index']} filled"
         if update.get("entry_price") is not None:
-            detail += f" @ {_fmt_num(update['entry_price'])}"
+            detail += f" @ {fmt_num(update['entry_price'])}"
     return f"✅ [{channel}] {signal['coin']} {signal['direction']} — {detail}"
 
 
