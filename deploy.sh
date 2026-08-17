@@ -18,13 +18,19 @@ ssh "$SERVER" "
   set -e
   cd $REMOTE_DIR
   git pull
-  ./venv/bin/pip install --quiet requests beautifulsoup4 playwright
+  ./venv/bin/pip install --quiet requests beautifulsoup4 playwright telethon
   systemctl restart xeca-watch.service xeca-bot.service
   # cinema-booking-bot.service is enabled but only actually restarted here once
   # CINEMA_TELEGRAM_BOT_TOKEN/CINEMA_TELEGRAM_CHAT_ID exist in .env -- restarting it
   # before that just churns a harmless crash-loop, so this checks first.
   if grep -q '^CINEMA_TELEGRAM_BOT_TOKEN=' .env 2>/dev/null; then
     systemctl restart cinema-booking-bot.service
+  fi
+  # Same guard for crypto-signals-listen/bot -- both need TELEGRAM_API_ID (Telethon) and
+  # a completed manual phone+OTP login (crypto_signals_session file must already exist on
+  # the server, scp'd over after logging in locally) before they're safe to (re)start.
+  if grep -q '^TELEGRAM_API_ID=' .env 2>/dev/null && [ -f crypto_signals_session.session ]; then
+    systemctl restart crypto-signals-listen.service crypto-signals-bot.service
   fi
   sleep 1
   systemctl --no-pager --lines=0 status xeca-watch.service xeca-bot.service cinema-booking-xvfb.service
