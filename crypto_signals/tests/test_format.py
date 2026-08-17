@@ -76,3 +76,41 @@ def test_format_unknown():
     text = format_outcome("crypto_vulture_signals", {"kind": "unknown", "raw": "huh"})
     assert "Không nhận diện được định dạng" in text
     assert "huh" in text
+
+
+def test_format_new_signal_large_price_precision():
+    """Regression: ensure large prices like 65432.15 don't get rounded to 65432.2"""
+    signal = {
+        "coin": "BTC/USDT", "direction": "LONG", "scalp": False,
+        "entry": [65432.15], "targets": [65500.0], "targets_plus": False,
+        "sl": 65000.0, "leverage": "10x",
+    }
+    text = format_outcome("crypto_vulture_signals", {"kind": "new_signal", "signal": signal})
+    assert "65432.15" in text
+    assert "65432.2" not in text  # Should not be rounded incorrectly
+
+
+def test_format_new_signal_very_large_price():
+    """Regression: ensure very large prices preserve full decimal precision"""
+    signal = {
+        "coin": "BTC/USDT", "direction": "LONG", "scalp": False,
+        "entry": [123456.789], "targets": [124000.0], "targets_plus": False,
+        "sl": 120000.0, "leverage": "5x",
+    }
+    text = format_outcome("crypto_vulture_signals", {"kind": "new_signal", "signal": signal})
+    assert "123456.789" in text
+
+
+def test_format_new_signal_very_small_price_no_scientific():
+    """Regression: ensure very small prices don't use scientific notation"""
+    signal = {
+        "coin": "SHIB/USDT", "direction": "LONG", "scalp": True,
+        "entry": [0.00001234], "targets": [0.00002], "targets_plus": False,
+        "sl": 0.00001, "leverage": "20x",
+    }
+    text = format_outcome("crypto_vulture_signals", {"kind": "new_signal", "signal": signal})
+    # Should NOT contain scientific notation
+    assert "e-" not in text.lower()
+    assert "1.234e" not in text.lower()
+    # Should contain the actual small number
+    assert "0.00001234" in text

@@ -3,9 +3,8 @@ sent to Telegram. No I/O here -- listener.py owns the actual send call."""
 
 
 def _fmt_num(v: float) -> str:
-    if v == int(v):
-        return str(int(v))
-    return f"{v:g}"
+    text = f"{v:.10f}".rstrip("0").rstrip(".")
+    return text if text else "0"
 
 
 def format_new_signal(channel: str, signal: dict) -> str:
