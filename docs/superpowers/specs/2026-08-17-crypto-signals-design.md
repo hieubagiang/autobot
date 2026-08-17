@@ -3,18 +3,26 @@
 ## Bối cảnh & mục tiêu
 
 Nghe tin nhắn từ một hoặc nhiều kênh Telegram public chuyên đăng "signal" giao dịch crypto (kênh
-đầu tiên: `@crypto_vulture_signals`), tự động parse ra entry/target/stop-loss, và báo lại qua
-Telegram của người dùng theo định dạng gọn, dễ đọc — tận dụng cơ chế đăng nhập Telethon (tài khoản
-cá nhân, MTProto) đã có sẵn trong `telegram-tools/telegram_bot_episode_grabber.py`, và cơ chế
-service-đôi (watch/bot) + state JSON + bot Telegram 2 chiều đã dùng cho `xeca_*`/`cinema_booking`.
+khởi tạo: `@crypto_vulture_signals` và `@CryptoVIPsignalTA`), tự động parse ra entry/target/
+stop-loss (kênh nào có cấu trúc signal), và báo lại qua Telegram của người dùng theo định dạng gọn,
+dễ đọc — tận dụng cơ chế đăng nhập Telethon (tài khoản cá nhân, MTProto) đã có sẵn trong
+`telegram-tools/telegram_bot_episode_grabber.py`, và cơ chế service-đôi (watch/bot) + state JSON +
+bot Telegram 2 chiều đã dùng cho `xeca_*`/`cinema_booking`.
+
+Không phải kênh nào cũng có cấu trúc signal cố định — `@CryptoVIPsignalTA` là kênh nhận định thị
+trường dạng text tự do, không có Entry/TP/SL (xem mục nghiên cứu bên dưới). Parser phải phân biệt
+được 2 loại nội dung này, và với loại "commentary" thì cố trích coin được nhắc tới để sau này dễ
+đối chiếu ("ghép cặp") với signal có cấu trúc cùng coin từ kênh khác.
 
 **Phase 1 (spec này)**: nghe N kênh, parse, lưu trạng thái từng signal, relay thông báo đã format
 đẹp về Telegram cá nhân. Quản lý danh sách kênh qua lệnh Telegram động (`/addchannel`,
 `/removechannel`...), không phải sửa file + restart tay.
 
-**Ngoài phạm vi Phase 1 (để sau)**: tổng hợp "xu hướng" xuyên nhiều kênh (vd "BTC: 3/4 kênh đang
-Long trong 2h qua ⇒ bullish"). Cần dữ liệu thực tế từ nhiều kênh chạy một thời gian trước khi thiết
-kế phần này cho chuẩn — làm sau khi Phase 1 đã chạy ổn.
+**Ngoài phạm vi Phase 1 (để sau)**: tổng hợp "xu hướng"/"ghép cặp" xuyên nhiều kênh (vd đối chiếu
+signal Long UNI của `crypto_vulture_signals` với commentary "ZK analysis... bullish" của
+`CryptoVIPsignalTA` cùng thời điểm). Phase 1 chỉ chuẩn bị nền cho việc này bằng cách gắn tag coin
+vào tin `commentary` — chưa tự động đối chiếu/tổng hợp gì cả. Cần dữ liệu thực tế từ nhiều kênh
+chạy một thời gian trước khi thiết kế phần đối chiếu này cho chuẩn.
 
 ## Nghiên cứu định dạng tin nhắn thật (`@crypto_vulture_signals`, xem trực tiếp qua `t.me/s/...`)
 
@@ -63,6 +71,31 @@ Không có gì đảm bảo đây là toàn bộ các dạng update sẽ gặp (
 ví dụ sống) — parser phải có nhánh fallback an toàn (xem "Nguyên tắc parser" bên dưới), không được
 crash hay âm thầm bỏ qua khi gặp định dạng lạ.
 
+## Nghiên cứu định dạng tin nhắn thật (`@CryptoVIPsignalTA`)
+
+Đã lấy trực tiếp 5 tin nhắn gần nhất (2026-08-17) — **khác hẳn `crypto_vulture_signals`: đây là
+kênh nhận định/phân tích thị trường bằng văn xuôi, không có Entry/TP/SL/leverage nào cả**:
+
+```
+ZK analysis:
+Price is breaking out of the falling wedge pattern upward. We will open a long position after
+confirmation. We expect a significant upward move once the breakout is confirmed.
+Key Level to Hold: $0.007700
+```
+```
+Bitcoin started the week with a strong green candle. I expect this upward movement to continue
+when the US market opens.
+```
+```
+GRAM analysis:
+Price broke the falling wedge pattern. This is bullish sign and you can open long positions here.
+We may feel a good upward rally in coming days.
+```
+
+Một số tin còn chung chung hơn nữa, không nhắc coin nào cụ thể (vd bình luận về option market của
+Bitcoin nói chung). Không có ID, không có cấu trúc cố định — đây là dữ liệu cho nhánh `commentary`
+của parser (xem bên dưới), không phải nhánh `signal`/`update`.
+
 ## Kiến trúc
 
 Package `crypto_signals/` (giống `cinema_booking/`), 2 process riêng biệt (giống mô hình
@@ -98,7 +131,7 @@ Hai service:
 
 ## `parser.py` — nguyên tắc parser
 
-`parse_message(text: str) -> dict`, luôn trả về 1 trong 3 dạng, **không bao giờ raise**:
+`parse_message(text: str) -> dict`, luôn trả về 1 trong 4 dạng, **không bao giờ raise**:
 
 - `{"type": "signal", "coin": "UNI/USDT", "direction": "LONG"|"SHORT", "scalp": bool,
   "entry": [3.28, 3.22], "targets": [3.30, 3.32, 3.34, 3.37, 3.40], "targets_plus": bool,
@@ -113,10 +146,24 @@ Hai service:
   "profit_pct": float | None, "period": str | None, "entry_price": float | None}` — khớp 2 dạng
   update đã thấy. Coin lấy từ hashtag đầu dòng (`#UNI`/`#ETH` + `/USDT` phía sau) — chuẩn hoá cùng
   định dạng `"XXX/USDT"` như trường `coin` của signal để so khớp được.
-- `{"type": "unknown", "raw": text}` — không khớp gì cả. Vẫn được `listener.py` relay về Telegram
-  (kèm nhãn "⚠️ Không nhận diện được định dạng") thay vì bị âm thầm bỏ qua — tránh lặp lại sự cố đã
-  từng gặp khi hard-code field/định dạng của bên thứ 3 mà không có đường lùi khi nó khác giả định
+- `{"type": "commentary", "coins": ["ZK"], "raw": text}` — không khớp Khuôn mẫu A/B lẫn 2 dạng
+  update, nhưng **kênh này được đánh dấu là kênh commentary** (xem cấu hình kênh bên dưới) — không
+  coi là lỗi định dạng. Trích coin theo 2 bước, kết quả gộp lại (có thể ra `[]` nếu không tìm thấy
+  gì, không sao — vẫn relay bình thường, không cảnh báo):
+  1. Pattern `^([A-Z0-9]{2,10}) analysis:` ở đầu tin (bắt được `ZK`, `GRAM`... mà không cần biết
+     trước danh sách coin) — đây là cấu trúc lặp lại thấy được ở kênh `@CryptoVIPsignalTA`.
+  2. Dò một danh sách nhỏ alias tên coin phổ biến trong phần còn lại của text (`bitcoin`→`BTC`,
+     `ethereum`→`ETH`, ... — seed list nhỏ, mở rộng dần khi thấy tên coin mới xuất hiện trong log
+     thực tế, không cố liệt kê đầy đủ mọi coin ngay từ đầu).
+- `{"type": "unknown", "raw": text}` — kênh **không** được đánh dấu commentary nhưng tin nhắn không
+  khớp Khuôn mẫu A/B/update nào cả. Vẫn được `listener.py` relay về Telegram (kèm nhãn "⚠️ Không
+  nhận diện được định dạng") thay vì bị âm thầm bỏ qua — tránh lặp lại sự cố đã từng gặp khi
+  hard-code field/định dạng của bên thứ 3 mà không có đường lùi khi nó khác giả định
   ([[tqtt_field_name_hardcoding_incident]]).
+
+`parse_message()` cần biết kênh nào là "commentary" để chọn nhánh cuối đúng — xem trường
+`channel.kind` trong schema `state.py` bên dưới; hàm nhận thêm tham số `channel_kind: "signal" |
+"commentary"` thay vì tự đoán qua nội dung tin.
 
 Test bằng đúng các đoạn text thật đã lấy ở mục nghiên cứu trên (fixtures), không phải text tự bịa.
 
@@ -125,7 +172,8 @@ Test bằng đúng các đoạn text thật đã lấy ở mục nghiên cứu t
 ```jsonc
 {
   "channels": [
-    {"username": "crypto_vulture_signals", "added_at": "2026-08-17T..."}
+    {"username": "crypto_vulture_signals", "kind": "signal", "added_at": "2026-08-17T..."},
+    {"username": "CryptoVIPsignalTA", "kind": "commentary", "added_at": "2026-08-17T..."}
   ],
   "signals": [
     {
@@ -181,8 +229,11 @@ coin + cùng chiều, update sẽ luôn gắn vào signal mới hơn — trườ
 3. Với mỗi kênh trong `state["channels"]`, `await client.get_entity(username)` để resolve (kênh
    public — không cần join thật).
 4. Đăng ký 1 `@client.on(events.NewMessage())` — trong handler: lấy username kênh từ
-   `event.chat.username`, bỏ qua nếu không nằm trong danh sách đang theo dõi, gọi
-   `parser.parse_message(event.raw_text)`, cập nhật `state.py`, format thông báo, gửi qua Bot API.
+   `event.chat.username`, bỏ qua nếu không nằm trong danh sách đang theo dõi, tra `kind` của kênh đó
+   trong `state.py`, gọi `parser.parse_message(event.raw_text, channel_kind=kind)`, cập nhật
+   `state.py` (chỉ với `type in ("signal", "update")` — `commentary`/`unknown` không tạo bản ghi
+   signal, chỉ relay), format thông báo, gửi qua Bot API. Tin `commentary` format khác tin
+   `signal`/`update` (vd `📰 [CryptoVIPsignalTA] #ZK: <nội dung>` thay vì khối Entry/Target/SL).
 5. Không backfill lịch sử khi mất kết nối/restart — chỉ nghe tin mới kể từ lúc kết nối lại (chấp
    nhận, vì đây là công cụ theo dõi realtime, không phải audit đầy đủ).
 
@@ -190,9 +241,10 @@ coin + cùng chiều, update sẽ luôn gắn vào signal mới hơn — trườ
 
 Theo khuôn mẫu `xeca_telegram_bot.py`:
 
-- `/addchannel <username>` — thêm vào `state["channels"]`, restart `crypto-signals-listen.service`.
-  Không tự validate kênh có tồn tại/public hay không ở tầng bot (bot này không có Telethon) — nếu
-  sai, `listener.py` sẽ log lỗi resolve, xem qua `/logs`.
+- `/addchannel <username> [signal|commentary]` — thêm vào `state["channels"]` (mặc định `kind` là
+  `signal` nếu bỏ trống — chọn `commentary` cho kênh nhận định tự do như `CryptoVIPsignalTA`),
+  restart `crypto-signals-listen.service`. Không tự validate kênh có tồn tại/public hay không ở
+  tầng bot (bot này không có Telethon) — nếu sai, `listener.py` sẽ log lỗi resolve, xem qua `/logs`.
 - `/removechannel <username>`
 - `/listchannels`
 - `/open` — liệt kê các signal đang `status != closed`, kèm coin/chiều/entry/target đã hit.
@@ -203,7 +255,9 @@ Theo khuôn mẫu `xeca_telegram_bot.py`:
 ## Testing
 
 - `test_parser.py`: fixture = đúng các đoạn text thật trong mục nghiên cứu ở trên (cả 2 khuôn mẫu
-  signal + 2 dạng update + ít nhất 1 case "unknown" tự bịa để test nhánh fallback).
+  signal + 2 dạng update + các đoạn commentary thật của `CryptoVIPsignalTA` (cả có và không trích
+  được coin) + ít nhất 1 case "unknown" tự bịa để test nhánh fallback khi kênh không phải
+  commentary).
 - `test_state.py`: CRUD channel + signal, khớp update vào signal đúng/không tìm thấy.
 - `test_control.py`: gọi qua `FakeStateFile`/tmp file, không đụng Telethon/Telegram thật.
 - `test_telegram_bot.py`: format tin nhắn + dispatch lệnh, mock HTTP (giống
@@ -222,3 +276,6 @@ Theo khuôn mẫu `xeca_telegram_bot.py`:
   triển khai thật, không giả định trước).
 - Chưa có cơ chế phát hiện "kênh im lặng bất thường" (vd kênh đổi username, hoặc bot bị kick) — để
   sau nếu cần, không nằm trong Phase 1.
+- Danh sách alias tên coin cho nhánh `commentary` (`bitcoin`→`BTC`...) chỉ là seed nhỏ ban đầu —
+  nhiều tin sẽ không trích được coin nào (`coins: []`), đây là giới hạn chấp nhận được của Phase 1
+  (relay vẫn diễn ra bình thường, chỉ thiếu tag), không phải lỗi cần chặn lại để sửa ngay.
