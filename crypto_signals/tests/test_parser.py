@@ -1,4 +1,4 @@
-from crypto_signals.parser import normalize_coin, _parse_scalp, _parse_structured
+from crypto_signals.parser import normalize_coin, _parse_scalp, _parse_structured, _parse_tp_hit, _parse_entry_filled
 
 SCALP_UNI = (
     "✅ SCALP TRADE - UNI 🏮 TYPE - LONG 👉 ENTRY - $3.28 - $3.22 👉 TARGET - $3.30, $3.32, "
@@ -77,3 +77,43 @@ def test_parse_structured_eth_long():
 def test_parse_structured_returns_none_for_non_structured_text():
     assert _parse_structured(SCALP_UNI) is None
     assert _parse_structured("just a random sentence") is None
+
+
+TP_HIT_TEXT = "#UNI/USDT Take-Profit target 1 ✅\nProfit: 36.5854% 📈\nPeriod: 5 hr 26 min ⏰"
+ENTRY_FILLED_TEXT = "#UNI/USDT Entry 1 ✅\nAverage Entry Price: 3.28 💵"
+
+
+def test_parse_tp_hit():
+    result = _parse_tp_hit(TP_HIT_TEXT)
+    assert result == {
+        "type": "update",
+        "coin": "UNI/USDT",
+        "kind": "tp_hit",
+        "target_index": 1,
+        "profit_pct": 36.5854,
+        "period": "5 hr 26 min",
+        "entry_price": None,
+    }
+
+
+def test_parse_tp_hit_returns_none_for_other_text():
+    assert _parse_tp_hit(ENTRY_FILLED_TEXT) is None
+    assert _parse_tp_hit(SCALP_UNI) is None
+
+
+def test_parse_entry_filled():
+    result = _parse_entry_filled(ENTRY_FILLED_TEXT)
+    assert result == {
+        "type": "update",
+        "coin": "UNI/USDT",
+        "kind": "entry_filled",
+        "target_index": 1,
+        "profit_pct": None,
+        "period": None,
+        "entry_price": 3.28,
+    }
+
+
+def test_parse_entry_filled_returns_none_for_other_text():
+    assert _parse_entry_filled(TP_HIT_TEXT) is None
+    assert _parse_entry_filled(STRUCTURED_ETH) is None

@@ -85,3 +85,46 @@ def _parse_structured(text: str) -> dict | None:
         "sl": sl_values[0],
         "leverage": header.group("leverage").lower(),
     }
+
+
+_TP_HIT_RE = re.compile(
+    r"#(?P<coin>[A-Za-z0-9]+)/USDT\s+Take-Profit target\s*(?P<target_index>\d+).*?"
+    r"Profit:\s*(?P<profit_pct>[\d.]+)%.*?"
+    r"Period:\s*(?P<period>[^\n⏰]+)",
+    re.IGNORECASE | re.DOTALL,
+)
+_ENTRY_FILLED_RE = re.compile(
+    r"#(?P<coin>[A-Za-z0-9]+)/USDT\s+Entry\s*(?P<target_index>\d+).*?"
+    r"Average Entry Price:\s*(?P<entry_price>[\d.]+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _parse_tp_hit(text: str) -> dict | None:
+    m = _TP_HIT_RE.search(text)
+    if not m:
+        return None
+    return {
+        "type": "update",
+        "coin": normalize_coin(m.group("coin")),
+        "kind": "tp_hit",
+        "target_index": int(m.group("target_index")),
+        "profit_pct": float(m.group("profit_pct")),
+        "period": m.group("period").strip(),
+        "entry_price": None,
+    }
+
+
+def _parse_entry_filled(text: str) -> dict | None:
+    m = _ENTRY_FILLED_RE.search(text)
+    if not m:
+        return None
+    return {
+        "type": "update",
+        "coin": normalize_coin(m.group("coin")),
+        "kind": "entry_filled",
+        "target_index": int(m.group("target_index")),
+        "profit_pct": None,
+        "period": None,
+        "entry_price": float(m.group("entry_price")),
+    }
