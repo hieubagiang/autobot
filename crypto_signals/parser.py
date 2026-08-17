@@ -1,8 +1,8 @@
 """Parses @crypto_vulture_signals-style messages into structured dicts.
 
-`parse_message()` (added in a later task) always returns a dict, never raises -- an
-unrecognized message becomes `{"type": "unknown", ...}` rather than an exception, since
-these channels have no committed schema and can change format at any time.
+`parse_message()` is the single public entry point that always returns a dict, never
+raises -- an unrecognized message becomes `{"type": "unknown", ...}` rather than an
+exception, since these channels have no committed schema and can change format at any time.
 """
 
 import re
@@ -143,14 +143,14 @@ _COIN_ALIASES = {
 }
 
 
-def extract_commentary_coins(text: str) -> list:
+def extract_commentary_coins(text: str) -> list[str]:
     coins = []
     m = _ANALYSIS_HEADER_RE.match(text)
     if m:
         coins.append(m.group(1).upper())
     lowered = text.lower()
     for alias, ticker in _COIN_ALIASES.items():
-        if alias in lowered and ticker not in coins:
+        if re.search(r"\b" + re.escape(alias) + r"\b", lowered) and ticker not in coins:
             coins.append(ticker)
     return coins
 

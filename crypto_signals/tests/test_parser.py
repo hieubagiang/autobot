@@ -167,3 +167,27 @@ def test_parse_message_commentary_channel_falls_back_to_commentary():
 def test_parse_message_signal_channel_falls_back_to_unknown():
     garbage = "just a random sentence with no known structure"
     assert parse_message(garbage, channel_kind="signal") == {"type": "unknown", "raw": garbage}
+
+
+def test_extract_commentary_coins_no_false_positive_from_eth_in_regroup():
+    # Regression: "eth" is substring of "regroup", should not match
+    text = "We will regroup together and reassess the market next week."
+    assert extract_commentary_coins(text) == []
+
+
+def test_extract_commentary_coins_no_false_positive_from_eth_in_method():
+    # Regression: "eth" is substring of "method" and "the", should not match
+    text = "The method for entries needs a review before we act."
+    assert extract_commentary_coins(text) == []
+
+
+def test_extract_commentary_coins_matches_whole_word_bitcoin():
+    # "bitcoin" as whole word should match despite being in other words
+    text = "Bitcoin is looking bullish this week. Bitcoin price is up."
+    assert extract_commentary_coins(text) == ["BTC"]
+
+
+def test_extract_commentary_coins_matches_whole_word_ethereum():
+    # "ethereum" as whole word should match
+    text = "Ethereum is consolidating before a major move."
+    assert extract_commentary_coins(text) == ["ETH"]
