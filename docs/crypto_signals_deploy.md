@@ -78,6 +78,11 @@ ssh root@hieuit.top "systemctl restart crypto-signals-listen.service"
   "SCALP TRADE" một dòng, và "Entries/Targets/Stop Loss" đánh số).
 - `CryptoVIPsignalTA` (`kind=commentary`) — nhận định thị trường bằng văn xuôi, không có
   Entry/TP/SL — chỉ trích coin được nhắc tới (xem `parser.extract_commentary_coins`).
+- `tuankietacademy` (`kind=commentary`) — kênh mới (118 subscriber lúc khảo sát 2026-08-18),
+  chưa có nội dung thật (chỉ có tin nhắn hệ thống "Channel created" + Collab.Land). Đăng ký
+  `commentary` để tránh bị gắn cảnh báo "unrecognized format" liên tục nếu kênh này sau đó
+  đăng nội dung dạng văn xuôi (tên "academy" gợi ý nội dung giáo dục hơn là signal có cấu
+  trúc) — chưa xác nhận được định dạng thật vì kênh chưa có bài đăng nào đáng kể.
 
 ## Định hướng tương lai (chưa làm — xem spec)
 

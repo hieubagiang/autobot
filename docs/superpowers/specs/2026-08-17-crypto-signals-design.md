@@ -279,3 +279,22 @@ Theo khuôn mẫu `xeca_telegram_bot.py`:
 - Danh sách alias tên coin cho nhánh `commentary` (`bitcoin`→`BTC`...) chỉ là seed nhỏ ban đầu —
   nhiều tin sẽ không trích được coin nào (`coins: []`), đây là giới hạn chấp nhận được của Phase 1
   (relay vẫn diễn ra bình thường, chỉ thiếu tag), không phải lỗi cần chặn lại để sửa ngay.
+
+## Addendum 2026-08-18 — thêm kênh thứ 3 (`tuankietacademy`)
+
+Sau khi Phase 1 đã code xong (`/addchannel` đã hoạt động), người dùng yêu cầu thêm
+`@tuankietacademy`. Khảo sát trực tiếp qua `t.me/s/tuankietacademy` (2026-08-18): kênh này
+**mới tạo, chỉ có 118 subscriber, và chưa có nội dung thật** — toàn bộ lịch sử tin nhắn chỉ
+gồm "Channel created" và một tin cấu hình bot Collab.Land (xác thực ví token-gate cộng đồng),
+không có signal lẫn commentary nào để tham chiếu định dạng.
+
+Vì không cần sửa code (parser/state/control/listener/bot đều đã tổng quát hoá cho việc thêm
+kênh qua `/addchannel <username> [signal|commentary]` từ Task 8), việc thêm kênh này chỉ là
+một hành động vận hành, không phải một task phát triển mới — không lập lại quy trình
+brainstorm/plan/subagent-driven-development cho việc này. Đăng ký với `kind=commentary` (tên
+"academy" gợi ý nội dung giáo dục/văn xuôi hơn là signal có cấu trúc), nhưng **định dạng tin
+nhắn thật của kênh này chưa được xác nhận** — khác với `crypto_vulture_signals`/
+`CryptoVIPsignalTA`, quyết định `kind=commentary` ở đây là suy đoán hợp lý, không phải xác nhận
+trực tiếp bằng dữ liệu thật (đúng nguyên tắc "verify trước khi assert", nhưng không có gì để
+verify vào lúc này). Cần theo dõi `/logs` sau khi kênh có bài đăng thật, đổi lại `kind=signal`
+qua `/removechannel` + `/addchannel` nếu hoá ra kênh đăng entry/TP/SL có cấu trúc.
