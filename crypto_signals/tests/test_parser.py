@@ -1,4 +1,4 @@
-from crypto_signals.parser import normalize_coin, _parse_scalp, _parse_structured, _parse_tp_hit, _parse_entry_filled, extract_commentary_coins, parse_message
+from crypto_signals.parser import normalize_coin, _parse_scalp, _parse_structured, _parse_owl_signal, _parse_tp_hit, _parse_entry_filled, extract_commentary_coins, parse_message
 
 SCALP_UNI = (
     "✅ SCALP TRADE - UNI 🏮 TYPE - LONG 👉 ENTRY - $3.28 - $3.22 👉 TARGET - $3.30, $3.32, "
@@ -14,6 +14,11 @@ STRUCTURED_ETH = (
     "🎯 Targets:\n1) 1910\n2) 1925\n3) 1940\n4) 1955\n\n"
     "🚫 Stop Loss:\n1) 1850"
 )
+
+
+# Real messages captured live from @ItsOwlPrints (t.me/s/ItsOwlPrints, 2026-08-19).
+OWL_SHORT_HYPE = "🔴 SHORT $HYPE/USDT | Cross 20X\n\n✅ Entry: 58.85\n\n🎯 TP: 58 - 57 -  55\n\n🛑 SL: 61"
+OWL_SHORT_NEAR = "🔴 SHORT $NEAR/USDT | Cross 20X\n\n✅ Entry: 1.62\n\n🎯 TP: 1.59 - 1.55 -  1.50\n\n🛑 SL: 1.70"
 
 
 def test_normalize_coin_bare_ticker_adds_usdt():
@@ -77,6 +82,46 @@ def test_parse_structured_eth_long():
 def test_parse_structured_returns_none_for_non_structured_text():
     assert _parse_structured(SCALP_UNI) is None
     assert _parse_structured("just a random sentence") is None
+
+
+def test_parse_owl_signal_short_hype():
+    result = _parse_owl_signal(OWL_SHORT_HYPE)
+    assert result == {
+        "type": "signal",
+        "coin": "HYPE/USDT",
+        "direction": "SHORT",
+        "scalp": False,
+        "entry": [58.85],
+        "targets": [58.0, 57.0, 55.0],
+        "targets_plus": False,
+        "sl": 61.0,
+        "leverage": "20x",
+    }
+
+
+def test_parse_owl_signal_short_near():
+    result = _parse_owl_signal(OWL_SHORT_NEAR)
+    assert result["coin"] == "NEAR/USDT"
+    assert result["entry"] == [1.62]
+    assert result["targets"] == [1.59, 1.55, 1.50]
+    assert result["sl"] == 1.70
+
+
+def test_parse_owl_signal_long_inferred_symmetric():
+    # Not yet confirmed against a live LONG message from this channel -- inferred
+    # symmetric with the confirmed SHORT template (see parser.py's docstring caveat).
+    text = "🟢 LONG $BTC/USDT | Cross 10X\n\n✅ Entry: 65000\n\n🎯 TP: 66000 - 67000\n\n🛑 SL: 63000"
+    result = _parse_owl_signal(text)
+    assert result["direction"] == "LONG"
+    assert result["coin"] == "BTC/USDT"
+    assert result["targets"] == [66000.0, 67000.0]
+    assert result["leverage"] == "10x"
+
+
+def test_parse_owl_signal_returns_none_for_non_owl_text():
+    assert _parse_owl_signal(SCALP_UNI) is None
+    assert _parse_owl_signal(STRUCTURED_ETH) is None
+    assert _parse_owl_signal("just a random sentence") is None
 
 
 TP_HIT_TEXT = "#UNI/USDT Take-Profit target 1 ✅\nProfit: 36.5854% 📈\nPeriod: 5 hr 26 min ⏰"
@@ -151,6 +196,12 @@ def test_parse_message_dispatches_to_scalp():
 
 def test_parse_message_dispatches_to_structured():
     assert parse_message(STRUCTURED_ETH, channel_kind="signal")["type"] == "signal"
+
+
+def test_parse_message_dispatches_to_owl_signal():
+    result = parse_message(OWL_SHORT_HYPE, channel_kind="signal")
+    assert result["type"] == "signal"
+    assert result["coin"] == "HYPE/USDT"
 
 
 def test_parse_message_dispatches_to_update():

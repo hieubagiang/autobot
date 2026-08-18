@@ -1,4 +1,5 @@
-"""Parses @crypto_vulture_signals-style messages into structured dicts.
+"""Parses signal/update/commentary messages from multiple crypto Telegram channels
+(@crypto_vulture_signals, @ItsOwlPrints, ...) into structured dicts.
 
 `parse_message()` is the single public entry point that always returns a dict, never
 raises -- an unrecognized message becomes `{"type": "unknown", ...}` rather than an
@@ -87,6 +88,37 @@ def _parse_structured(text: str) -> dict | None:
     }
 
 
+_OWL_RE = re.compile(
+    r"(?P<direction>SHORT|LONG)\s+\$(?P<coin>[A-Za-z0-9]+)/USDT.*?"
+    r"(?P<leverage_num>\d+)X.*?"
+    r"Entry:\s*(?P<entry>[\d.]+).*?"
+    r"TP:\s*(?P<targets>[\d.\s-]+?)\s*(?:\n|$).*?"
+    r"SL:\s*(?P<sl>[\d.]+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _parse_owl_signal(text: str) -> dict | None:
+    """@ItsOwlPrints's template -- e.g. '🔴 SHORT $HYPE/USDT | Cross 20X\\n\\n✅ Entry: 58.85\\n\\n
+    🎯 TP: 58 - 57 -  55\\n\\n🛑 SL: 61'. Only the SHORT shape has been confirmed against real
+    channel text (2026-08-19) -- LONG is inferred symmetric, not yet seen live."""
+    m = _OWL_RE.search(text)
+    if not m:
+        return None
+    d = m.groupdict()
+    return {
+        "type": "signal",
+        "coin": normalize_coin(d["coin"]),
+        "direction": d["direction"].upper(),
+        "scalp": False,
+        "entry": [float(d["entry"])],
+        "targets": _parse_number_list(d["targets"], "-"),
+        "targets_plus": False,
+        "sl": float(d["sl"]),
+        "leverage": f"{d['leverage_num']}x",
+    }
+
+
 _TP_HIT_RE = re.compile(
     r"#(?P<coin>[A-Za-z0-9]+)/USDT\s+Take-Profit target\s*(?P<target_index>\d+).*?"
     r"Profit:\s*(?P<profit_pct>[\d.]+)%.*?"
@@ -157,7 +189,7 @@ def extract_commentary_coins(text: str) -> list[str]:
 
 def parse_message(text: str, channel_kind: str = "signal") -> dict:
     text = text.strip()
-    for parse_fn in (_parse_scalp, _parse_structured, _parse_tp_hit, _parse_entry_filled):
+    for parse_fn in (_parse_scalp, _parse_structured, _parse_owl_signal, _parse_tp_hit, _parse_entry_filled):
         try:
             result = parse_fn(text)
         except Exception:

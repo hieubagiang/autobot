@@ -298,3 +298,48 @@ nhắn thật của kênh này chưa được xác nhận** — khác với `cry
 trực tiếp bằng dữ liệu thật (đúng nguyên tắc "verify trước khi assert", nhưng không có gì để
 verify vào lúc này). Cần theo dõi `/logs` sau khi kênh có bài đăng thật, đổi lại `kind=signal`
 qua `/removechannel` + `/addchannel` nếu hoá ra kênh đăng entry/TP/SL có cấu trúc.
+
+## Addendum 2026-08-19 — thêm kênh thứ 4 (`ItsOwlPrints`), khuôn mẫu signal thứ 3
+
+Người dùng yêu cầu thêm `@ItsOwlPrints` (11K subscriber). Khảo sát trực tiếp qua
+`t.me/s/ItsOwlPrints` (2026-08-19): đây là kênh signal có cấu trúc thật (khác
+`tuankietacademy`), nhưng dùng **một khuôn mẫu hoàn toàn khác** với 2 khuôn mẫu đã có của
+`crypto_vulture_signals` — không khớp `_parse_scalp` lẫn `_parse_structured`. Ví dụ thật
+(2 tin, cùng chiều SHORT):
+
+```
+🔴 SHORT $HYPE/USDT | Cross 20X
+
+✅ Entry: 58.85
+
+🎯 TP: 58 - 57 -  55
+
+🛑 SL: 61
+```
+```
+🔴 SHORT $NEAR/USDT | Cross 20X
+
+✅ Entry: 1.62
+
+🎯 TP: 1.59 - 1.55 -  1.50
+
+🛑 SL: 1.70
+```
+
+Đặc điểm: `<SHORT|LONG> $<COIN>/USDT | Cross <N>X` ở dòng đầu, `Entry:` một giá trị duy nhất
+(không phải khoảng), `TP:` nhiều giá trị nối bằng dấu `-` (không phải `,`/`&` như Khuôn mẫu A,
+không phải danh sách đánh số như Khuôn mẫu B), `SL:` một giá trị. Không có ví dụ tin update
+(TP hit/stopped out) nào xuất hiện trong dữ liệu khảo sát được.
+
+Vì đây là **khuôn mẫu thứ 3 thật sự khác**, không phải chỉ thêm kênh vào danh sách — cần sửa
+`parser.py` (thêm `_parse_owl_signal` + `_OWL_RE`, đăng ký vào `parse_message()`'s dispatch
+loop) — coi đây là một bounded task (thay đổi có phạm vi rõ, trên code đã tồn tại), làm trực
+tiếp kèm test dùng đúng 2 đoạn text thật ở trên, không lập lại toàn bộ quy trình
+brainstorm/spec/plan/subagent-driven-development của Phase 1 gốc.
+
+**Giới hạn đã biết**: chỉ xác nhận được chiều `SHORT` bằng dữ liệu thật; chiều `LONG` được
+suy đoán đối xứng (cùng cấu trúc, emoji tiêu đề khác — quy ước 🔴=short/🟢=long như các kênh
+khác) nhưng **chưa có ví dụ sống** — cần xác nhận lại khi kênh này đăng tín hiệu LONG đầu
+tiên. `leverage` được chuẩn hoá về cùng định dạng `"Nx"` như 2 khuôn mẫu kia (bỏ tiền tố
+`Cross`/`Isolated` — kênh này chỉ thấy dùng `Cross`, chưa xác nhận `Isolated` có xuất hiện
+hay không).

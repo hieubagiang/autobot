@@ -83,6 +83,12 @@ ssh root@hieuit.top "systemctl restart crypto-signals-listen.service"
   `commentary` để tránh bị gắn cảnh báo "unrecognized format" liên tục nếu kênh này sau đó
   đăng nội dung dạng văn xuôi (tên "academy" gợi ý nội dung giáo dục hơn là signal có cấu
   trúc) — chưa xác nhận được định dạng thật vì kênh chưa có bài đăng nào đáng kể.
+- `ItsOwlPrints` (`kind=signal`) — kênh signal có cấu trúc, nhưng dùng **khuôn mẫu thứ 3**
+  khác hẳn `crypto_vulture_signals` (đã thêm parser riêng, `_parse_owl_signal` trong
+  `parser.py`, xác nhận bằng dữ liệu thật 2026-08-19 — xem addendum trong spec):
+  `"🔴 SHORT $HYPE/USDT | Cross 20X\n\n✅ Entry: 58.85\n\n🎯 TP: 58 - 57 - 55\n\n🛑 SL: 61"`.
+  Chỉ xác nhận chiều SHORT trực tiếp bằng dữ liệu thật — chiều LONG suy đoán đối xứng, chưa
+  thấy ví dụ sống, cần theo dõi `/logs` khi kênh đăng tín hiệu LONG đầu tiên để xác nhận lại.
 
 ## Định hướng tương lai (chưa làm — xem spec)
 
