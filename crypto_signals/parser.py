@@ -119,6 +119,86 @@ def _parse_owl_signal(text: str) -> dict | None:
     }
 
 
+_SCALP_SIGNAL_HEADER_RE = re.compile(r"SCALP SIGNAL\s*[—-]\s*(?P<coin>[A-Za-z0-9]+)", re.IGNORECASE)
+_SCALP_SIGNAL_ENTRY_RE = re.compile(r"(?P<direction>LONG|SHORT)\s*ENTRY:\s*(?P<entry>[^\n]+)", re.IGNORECASE)
+_SCALP_SIGNAL_TP_RE = re.compile(r"TP\d+:\s*\$?([\d.]+)", re.IGNORECASE)
+_SCALP_SIGNAL_SL_RE = re.compile(r"STOP LOSS:\s*\$?(?P<sl>[\d.]+)", re.IGNORECASE)
+_SCALP_SIGNAL_LEVERAGE_RE = re.compile(r"LEVERAGE:\s*(?P<leverage_num>\d+)X", re.IGNORECASE)
+
+
+def _parse_scalp_signal(text: str) -> dict | None:
+    """@crypto_vulture_signals's 4th template -- e.g. '📊 SCALP SIGNAL — XAI\\n🟢 LONG ENTRY:
+    $0.00719 – $0.00771\\n🎯 TP1: $0.00726\\n...\\n🛑 STOP LOSS: $0.00672\\n⚡️ LEVERAGE: 60X'.
+    Confirmed against a real live message (2026-08-19) -- note the entry range uses an en-dash
+    ("–"), not a hyphen, unlike every other template in this file."""
+    header = _SCALP_SIGNAL_HEADER_RE.search(text)
+    entry = _SCALP_SIGNAL_ENTRY_RE.search(text)
+    sl = _SCALP_SIGNAL_SL_RE.search(text)
+    leverage = _SCALP_SIGNAL_LEVERAGE_RE.search(text)
+    if not (header and entry and sl and leverage):
+        return None
+    targets = [float(v) for v in _SCALP_SIGNAL_TP_RE.findall(text)]
+    if not targets:
+        return None
+    entry_parts = [p for p in re.split(r"[-–]", entry.group("entry")) if NUM_RE.search(p)]
+    return {
+        "type": "signal",
+        "coin": normalize_coin(header.group("coin")),
+        "direction": entry.group("direction").upper(),
+        "scalp": True,
+        "entry": [float(NUM_RE.search(p).group()) for p in entry_parts],
+        "targets": targets,
+        "targets_plus": False,
+        "sl": float(sl.group("sl")),
+        "leverage": f"{leverage.group('leverage_num')}x",
+    }
+
+
+_SCALP_TRADE_ALT_HEADER_RE = re.compile(r"SCALP TRADE\s*-\s*(?P<coin>[A-Za-z0-9]+)", re.IGNORECASE)
+_SCALP_TRADE_ALT_ENTRY_RE = re.compile(r"ENTRY\s*-\s*(?P<entry>[^\n]+)", re.IGNORECASE)
+_SCALP_TRADE_ALT_DIRECTION_RE = re.compile(r"DIRECTION\s*-\s*(?P<direction>LONG|SHORT)", re.IGNORECASE)
+_SCALP_TRADE_ALT_TARGET_RE = re.compile(r"TARGET\s*-\s*(?P<targets>[^\n]+)", re.IGNORECASE)
+_SCALP_TRADE_ALT_SL_RE = re.compile(r"SL\s*-\s*\$?(?P<sl>[\d.,]+)", re.IGNORECASE)
+_SCALP_TRADE_ALT_LEVERAGE_RE = re.compile(r"LEVERAGE\s*-\s*(?P<leverage>\d+x)", re.IGNORECASE)
+
+
+def _parse_scalp_trade_alt(text: str) -> dict | None:
+    """@crypto_vulture_signals's 5th template -- reorders/relabels the original SCALP TRADE
+    shape: 'DIRECTION -' instead of 'TYPE -' (and appearing after ENTRY, not before), entry
+    range joined by the word "TO" instead of "-", and targets space-separated instead of
+    comma+"&"-separated. Confirmed against a real live message (2026-08-19):
+    '✅ SCALP TRADE - PIXEL\\n👉 ENTRY - $0.00483 TO $0.00470\\n👉 DIRECTION -  LONG\\n
+    👉 TARGET -  $0.00490 $0.00495 $0.00500  $0.00505 $0.00518\\n👉 SL - $0.00449\\n
+    🚨LEVERAGE - 60x'. Field-independent lookups (rather than one sequential regex like
+    _SCALP_RE) so field order doesn't matter -- this channel has now shown 3 different
+    orderings/labelings of the same conceptual fields."""
+    header = _SCALP_TRADE_ALT_HEADER_RE.search(text)
+    entry = _SCALP_TRADE_ALT_ENTRY_RE.search(text)
+    direction = _SCALP_TRADE_ALT_DIRECTION_RE.search(text)
+    target = _SCALP_TRADE_ALT_TARGET_RE.search(text)
+    sl = _SCALP_TRADE_ALT_SL_RE.search(text)
+    leverage = _SCALP_TRADE_ALT_LEVERAGE_RE.search(text)
+    if not (header and entry and direction and target and sl and leverage):
+        return None
+    entry_parts = [
+        p for p in re.split(r"\s+TO\s+", entry.group("entry"), flags=re.IGNORECASE) if NUM_RE.search(p)
+    ]
+    targets = [float(v) for v in NUM_RE.findall(target.group("targets"))]
+    if not entry_parts or not targets:
+        return None
+    return {
+        "type": "signal",
+        "coin": normalize_coin(header.group("coin")),
+        "direction": direction.group("direction").upper(),
+        "scalp": True,
+        "entry": [float(NUM_RE.search(p).group()) for p in entry_parts],
+        "targets": targets,
+        "targets_plus": False,
+        "sl": float(NUM_RE.search(sl.group("sl")).group()),
+        "leverage": leverage.group("leverage").lower(),
+    }
+
+
 _TP_HIT_RE = re.compile(
     r"#(?P<coin>[A-Za-z0-9]+)/USDT\s+Take-Profit target\s*(?P<target_index>\d+).*?"
     r"Profit:\s*(?P<profit_pct>[\d.]+)%.*?"
@@ -189,7 +269,10 @@ def extract_commentary_coins(text: str) -> list[str]:
 
 def parse_message(text: str, channel_kind: str = "signal") -> dict:
     text = text.strip()
-    for parse_fn in (_parse_scalp, _parse_structured, _parse_owl_signal, _parse_tp_hit, _parse_entry_filled):
+    for parse_fn in (
+        _parse_scalp, _parse_structured, _parse_owl_signal, _parse_scalp_signal,
+        _parse_scalp_trade_alt, _parse_tp_hit, _parse_entry_filled,
+    ):
         try:
             result = parse_fn(text)
         except Exception:

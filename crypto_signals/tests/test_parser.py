@@ -1,4 +1,4 @@
-from crypto_signals.parser import normalize_coin, _parse_scalp, _parse_structured, _parse_owl_signal, _parse_tp_hit, _parse_entry_filled, extract_commentary_coins, parse_message
+from crypto_signals.parser import normalize_coin, _parse_scalp, _parse_structured, _parse_owl_signal, _parse_scalp_signal, _parse_scalp_trade_alt, _parse_tp_hit, _parse_entry_filled, extract_commentary_coins, parse_message
 
 SCALP_UNI = (
     "✅ SCALP TRADE - UNI 🏮 TYPE - LONG 👉 ENTRY - $3.28 - $3.22 👉 TARGET - $3.30, $3.32, "
@@ -19,6 +19,35 @@ STRUCTURED_ETH = (
 # Real messages captured live from @ItsOwlPrints (t.me/s/ItsOwlPrints, 2026-08-19).
 OWL_SHORT_HYPE = "🔴 SHORT $HYPE/USDT | Cross 20X\n\n✅ Entry: 58.85\n\n🎯 TP: 58 - 57 -  55\n\n🛑 SL: 61"
 OWL_SHORT_NEAR = "🔴 SHORT $NEAR/USDT | Cross 20X\n\n✅ Entry: 1.62\n\n🎯 TP: 1.59 - 1.55 -  1.50\n\n🛑 SL: 1.70"
+
+# Real message relayed live as "unknown format" from @crypto_vulture_signals (2026-08-19) --
+# the channel's 4th distinct signal-message shape observed so far.
+SCALP_SIGNAL_XAI = (
+    "📊 SCALP SIGNAL — XAI\n"
+    "🟢 LONG ENTRY: $0.00719 – $0.00771\n"
+    "🎯 TP1: $0.00726\n"
+    "🎯 TP2: $0.00743\n"
+    "🎯 TP3: $0.00752\n"
+    "🎯 TP4: $0.00763\n"
+    "🎯 TP5: $0.00772\n"
+    "🛑 STOP LOSS: $0.00672\n"
+    "⚡️ LEVERAGE: 60X\n"
+    "🔴 TRADE VALID ON: Confirmation above entry zone\n"
+    "⚠️ Trade with proper risk management."
+)
+
+# Real message relayed live as "unknown format" from @crypto_vulture_signals (2026-08-19) --
+# the channel's 5th distinct signal-message shape observed so far (reorders/relabels the
+# original SCALP TRADE fields).
+SCALP_TRADE_ALT_PIXEL = (
+    "✅ SCALP TRADE - PIXEL\n\n"
+    "👉 ENTRY - $0.00483 TO $0.00470\n\n"
+    "👉 DIRECTION -  LONG\n\n"
+    "👉 TARGET -  $0.00490 $0.00495 $0.00500  $0.00505 $0.00518\n\n"
+    "👉 SL - $0.00449\n\n"
+    "🚨LEVERAGE - 60x\n\n"
+    "🔴TRADE VALID ON"
+)
 
 
 def test_normalize_coin_bare_ticker_adds_usdt():
@@ -124,6 +153,52 @@ def test_parse_owl_signal_returns_none_for_non_owl_text():
     assert _parse_owl_signal("just a random sentence") is None
 
 
+def test_parse_scalp_signal_xai():
+    result = _parse_scalp_signal(SCALP_SIGNAL_XAI)
+    assert result == {
+        "type": "signal",
+        "coin": "XAI/USDT",
+        "direction": "LONG",
+        "scalp": True,
+        "entry": [0.00719, 0.00771],
+        "targets": [0.00726, 0.00743, 0.00752, 0.00763, 0.00772],
+        "targets_plus": False,
+        "sl": 0.00672,
+        "leverage": "60x",
+    }
+
+
+def test_parse_scalp_signal_returns_none_for_other_text():
+    assert _parse_scalp_signal(SCALP_UNI) is None
+    assert _parse_scalp_signal(STRUCTURED_ETH) is None
+    assert _parse_scalp_signal(OWL_SHORT_HYPE) is None
+    assert _parse_scalp_signal(SCALP_TRADE_ALT_PIXEL) is None
+
+
+def test_parse_scalp_trade_alt_pixel():
+    result = _parse_scalp_trade_alt(SCALP_TRADE_ALT_PIXEL)
+    assert result == {
+        "type": "signal",
+        "coin": "PIXEL/USDT",
+        "direction": "LONG",
+        "scalp": True,
+        "entry": [0.00483, 0.00470],
+        "targets": [0.00490, 0.00495, 0.00500, 0.00505, 0.00518],
+        "targets_plus": False,
+        "sl": 0.00449,
+        "leverage": "60x",
+    }
+
+
+def test_parse_scalp_trade_alt_returns_none_for_other_text():
+    # Crucially must not collide with the original SCALP TRADE template (which uses
+    # "TYPE -" instead of "DIRECTION -") or the other confirmed templates.
+    assert _parse_scalp_trade_alt(SCALP_UNI) is None
+    assert _parse_scalp_trade_alt(STRUCTURED_ETH) is None
+    assert _parse_scalp_trade_alt(OWL_SHORT_HYPE) is None
+    assert _parse_scalp_trade_alt(SCALP_SIGNAL_XAI) is None
+
+
 TP_HIT_TEXT = "#UNI/USDT Take-Profit target 1 ✅\nProfit: 36.5854% 📈\nPeriod: 5 hr 26 min ⏰"
 ENTRY_FILLED_TEXT = "#UNI/USDT Entry 1 ✅\nAverage Entry Price: 3.28 💵"
 
@@ -202,6 +277,18 @@ def test_parse_message_dispatches_to_owl_signal():
     result = parse_message(OWL_SHORT_HYPE, channel_kind="signal")
     assert result["type"] == "signal"
     assert result["coin"] == "HYPE/USDT"
+
+
+def test_parse_message_dispatches_to_scalp_signal():
+    result = parse_message(SCALP_SIGNAL_XAI, channel_kind="signal")
+    assert result["type"] == "signal"
+    assert result["coin"] == "XAI/USDT"
+
+
+def test_parse_message_dispatches_to_scalp_trade_alt():
+    result = parse_message(SCALP_TRADE_ALT_PIXEL, channel_kind="signal")
+    assert result["type"] == "signal"
+    assert result["coin"] == "PIXEL/USDT"
 
 
 def test_parse_message_dispatches_to_update():
